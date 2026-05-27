@@ -10,6 +10,84 @@ const router = Router();
 const prisma = new PrismaClient();
 
 /**
+ * GET /api/freelancers/top
+ * Get top freelancers leaderboard sorted by rating and review count.
+ * Returns the highest-rated and most-reviewed freelancers.
+ */
+router.get(
+  "/top",
+  asyncHandler(async (req: Request, res: Response) => {
+    const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    const topFreelancers = await prisma.user.findMany({
+      where: {
+        role: "FREELANCER",
+        averageRating: { gte: 4.0 }, // Only show highly-rated freelancers
+        reviewCount: { gt: 0 }, // Must have at least one review
+      },
+      select: {
+        id: true,
+        username: true,
+        avatarUrl: true,
+        bio: true,
+        skills: true,
+        availability: true,
+        averageRating: true,
+        reviewCount: true,
+        walletAddress: true,
+        createdAt: true,
+      },
+      orderBy: [
+        { averageRating: "desc" },
+        { reviewCount: "desc" },
+        { createdAt: "asc" },
+      ],
+      take: limit,
+      skip: offset,
+    });
+
+    // Fetch on-chain reputation for each freelancer
+    const freelancersWithReputation = await Promise.all(
+      topFreelancers.map(async (freelancer) => {
+        const reputation = await ReputationService.getReputation(
+          freelancer.walletAddress
+        );
+        return {
+          ...freelancer,
+          reputation: reputation
+            ? {
+                totalScore: reputation.total_score.toString(),
+                totalWeight: reputation.total_weight.toString(),
+                reviewCount: reputation.review_count,
+              }
+            : null,
+        };
+      })
+    );
+
+    // Get total count for pagination
+    const total = await prisma.user.count({
+      where: {
+        role: "FREELANCER",
+        averageRating: { gte: 4.0 },
+        reviewCount: { gt: 0 },
+      },
+    });
+
+    res.json({
+      data: freelancersWithReputation,
+      pagination: {
+        total,
+        limit,
+        offset,
+        hasMore: offset + limit < total,
+      },
+    });
+  })
+);
+
+/**
  * GET /api/freelancers/search
  * Public freelancer discovery with optional filters (skills, rating, availability, text).
  */
