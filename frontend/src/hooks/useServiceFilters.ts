@@ -9,6 +9,7 @@ export interface ServiceFilters {
   category: string;
   minPrice: string;
   maxPrice: string;
+  minRating: string;
   sort: string;
   page: number;
 }
@@ -19,6 +20,7 @@ const DEFAULTS: ServiceFilters = {
   category: "All",
   minPrice: "",
   maxPrice: "",
+  minRating: "",
   sort: "newest",
   page: 1,
 };
@@ -28,11 +30,12 @@ function parseFiltersFromParams(searchParams: URLSearchParams): ServiceFilters {
   const page = parseInt(searchParams.get("page") || "1", 10);
 
   return {
-    search: searchParams.get("q") || "",
+    search: searchParams.get("search") || searchParams.get("q") || "",
     skills: skills ? skills.split(",") : [],
     category: searchParams.get("category") || "All",
     minPrice: searchParams.get("minPrice") || "",
     maxPrice: searchParams.get("maxPrice") || "",
+    minRating: searchParams.get("minRating") || "",
     sort: searchParams.get("sort") || "newest",
     page: isNaN(page) ? 1 : page,
   };
@@ -40,11 +43,12 @@ function parseFiltersFromParams(searchParams: URLSearchParams): ServiceFilters {
 
 function filtersToParams(filters: ServiceFilters): URLSearchParams {
   const params = new URLSearchParams();
-  if (filters.search) params.set("q", filters.search);
+  if (filters.search) params.set("search", filters.search);
   if (filters.skills.length) params.set("skills", filters.skills.join(","));
   if (filters.category !== "All") params.set("category", filters.category);
   if (filters.minPrice) params.set("minPrice", filters.minPrice);
   if (filters.maxPrice) params.set("maxPrice", filters.maxPrice);
+  if (filters.minRating) params.set("minRating", filters.minRating);
   if (filters.sort !== "newest") params.set("sort", filters.sort);
   if (filters.page > 1) params.set("page", String(filters.page));
   return params;
@@ -133,6 +137,7 @@ export function useServiceFilters() {
     if (filters.skills.length) count++;
     if (filters.category !== "All") count++;
     if (filters.minPrice || filters.maxPrice) count++;
+    if (filters.minRating) count++;
     if (filters.sort !== "newest") count++;
     return count;
   }, [filters]);

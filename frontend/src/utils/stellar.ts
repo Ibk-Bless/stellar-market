@@ -1,4 +1,15 @@
-import { xdr } from "@stellar/stellar-sdk";
+import {
+  BASE_FEE,
+  Networks,
+  Transaction,
+  TransactionBuilder,
+  rpc,
+  xdr,
+} from "@stellar/stellar-sdk";
+
+const RPC_URL =
+  process.env.NEXT_PUBLIC_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
+const NETWORK_PASSPHRASE = Networks.TESTNET;
 
 /**
  * Parses the on-chain job ID from the Soroban contract return value XDR.
@@ -37,4 +48,52 @@ export function parseJobIdFromResult(returnValueXdr: string): number {
       `Failed to parse on-chain job ID from transaction result: ${err instanceof Error ? err.message : String(err)}`
     );
   }
+}
+
+export type TransactionPreview = {
+  preparedXdr: string;
+  estimatedResourceFeeStroops: bigint;
+  estimatedTotalFeeStroops: bigint;
+  requiresRestoreFootprint: boolean;
+};
+
+/**
+ * Simulates a Soroban transaction and prepares it for signing.
+ */
+export async function prepareSorobanTransaction(
+  transactionXdr: string,
+): Promise<TransactionPreview> {
+  if (!transactionXdr) {
+    throw new Error("No transaction XDR provided.");
+  }
+
+  const server = new rpc.Server(RPC_URL);
+  const transaction = TransactionBuilder.fromXDR(
+    transactionXdr,
+    NETWORK_PASSPHRASE,
+  ) as Transaction;
+
+  const simulation = await server.simulateTransaction(transaction);
+
+  if (rpc.Api.isSimulationError(simulation)) {
+    throw new Error(simulation.error || "Transaction simulation failed.");
+  }
+
+  if (!simulation.transactionData) {
+    throw new Error("Simulation did not return Soroban transaction data.");
+  }
+
+  const resourceFee = BigInt(simulation.minResourceFee ?? "0");
+  const totalFee = BigInt(BASE_FEE.toString()) + resourceFee;
+
+  const preparedTransaction = TransactionBuilder.cloneFrom(transaction, {
+    fee: totalFee.toString(),
+  }).setSorobanData(simulation.transactionData);
+
+  return {
+    preparedXdr: preparedTransaction.build().toXDR(),
+    estimatedResourceFeeStroops: resourceFee,
+    estimatedTotalFeeStroops: totalFee,
+    requiresRestoreFootprint: Boolean(simulation.restorePreamble),
+  };
 }

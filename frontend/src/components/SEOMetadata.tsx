@@ -22,7 +22,7 @@ export function generateSEOMetadata({
     title: fullTitle,
     description,
     openGraph: {
-      title: fullTitle,
+      title,
       description,
       images: [
         {
@@ -52,18 +52,19 @@ export function generateSEOMetadata({
 export function generateJobMetadata(job: {
   title: string;
   description: string;
-  budget: number;
   id: string;
 }): Metadata {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://stellarmarket.io";
   const title = job.title;
-  const description = job.description.length > 160 
-    ? `${job.description.substring(0, 157)}...` 
+  const description = job.description.length > 160
+    ? `${job.description.substring(0, 157)}...`
     : job.description;
+  const canonical = new URL(`/jobs/${job.id}`, siteUrl).toString();
   
   return generateSEOMetadata({
     title,
-    description: `${description} | Budget: $${job.budget}`,
-    url: `/jobs/${job.id}`,
+    description,
+    url: canonical,
     type: 'article',
   });
 }
@@ -76,6 +77,7 @@ export function generateProfileMetadata(profile: {
   avatar?: string;
   username: string;
 }): Metadata {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://stellarmarket.io";
   const title = profile.tagline 
     ? `${profile.name} - ${profile.tagline}`
     : profile.name;
@@ -83,12 +85,13 @@ export function generateProfileMetadata(profile: {
   const description = profile.bio.length > 160 
     ? `${profile.bio.substring(0, 157)}...` 
     : profile.bio;
+  const canonical = new URL(`/profile/${profile.username}`, siteUrl).toString();
   
   return generateSEOMetadata({
     title,
     description,
     image: profile.avatar || '/og-image.png',
-    url: `/freelancers/${profile.username}`,
+    url: canonical,
     type: 'profile',
   });
 }

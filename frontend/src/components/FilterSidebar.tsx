@@ -3,17 +3,7 @@
 import { useState } from "react";
 import { X, SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { JobFilters } from "@/hooks/useJobFilters";
-
-const SKILLS = [
-  "Rust",
-  "TypeScript",
-  "React",
-  "Figma",
-  "Solidity",
-  "Node.js",
-  "Python",
-  "Go",
-];
+import { JOB_CATEGORIES, JOB_SKILLS } from "@/constants/jobs";
 
 const STATUSES = [
   { value: "OPEN", label: "Open" },
@@ -114,10 +104,26 @@ export default function FilterSidebar({
         </select>
       </FilterSection>
 
+      {/* Category */}
+      <FilterSection title="Category">
+        <select
+          value={filters.category}
+          onChange={(e) => updateFilter("category", e.target.value)}
+          className="input-field text-sm"
+        >
+          <option value="All">All Categories</option>
+          {JOB_CATEGORIES.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+      </FilterSection>
+
       {/* Skills */}
       <FilterSection title="Skills">
         <div className="flex flex-wrap gap-2">
-          {SKILLS.map((skill) => (
+          {JOB_SKILLS.map((skill) => (
             <button
               key={skill}
               onClick={() => toggleArrayFilter("skills", skill)}

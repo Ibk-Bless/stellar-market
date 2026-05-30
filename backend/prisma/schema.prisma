@@ -43,6 +43,15 @@ enum MilestoneStatus {
   PARTIALLY_PAID
 }
 
+enum DeadlineExtensionStatus {
+  PENDING
+  APPROVED_BY_CLIENT
+  APPROVED_BY_FREELANCER
+  APPROVED_BY_BOTH
+  REJECTED
+  EXPIRED
+}
+
 enum ApplicationStatus {
   PENDING
   ACCEPTED
@@ -92,7 +101,7 @@ enum DisputeStatus {
 
 model User {
   id                     String    @id @default(cuid())
-  walletAddress          String    @unique
+  walletAddress          String?   @unique
   email                  String?   @unique
   username               String    @unique
   password               String?
@@ -150,6 +159,8 @@ model User {
   referrals          User[]    @relation("UserReferrals")
   referralBonusEarned Float    @default(0)
   refreshTokens      RefreshToken[]
+  deadlineExtensionRequests DeadlineExtensionRequest[] @relation("ExtensionRequests")
+  deadlineExtensionRejections DeadlineExtensionRequest[] @relation("ExtensionRejections")
 }
 
 model NotificationPreference {
@@ -194,6 +205,7 @@ model Job {
   attachments  Attachment[]
   dispute      Dispute?
   savedBy      SavedJob[]    @relation("SavedByFreelancers")
+  deadlineExtensionRequests DeadlineExtensionRequest[] @relation("DeadlineExtensions")
 
   @@index([deletedAt])
 }
@@ -211,9 +223,37 @@ model Milestone {
   dueDate          DateTime?
   createdAt        DateTime        @default(now())
 
-  job          Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
-  attachments  Attachment[]
+  job                      Job                        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  transactions             Transaction[]
+  attachments              Attachment[]
+  deadlineExtensionRequests DeadlineExtensionRequest[] @relation("MilestoneExtensions")
+}
+
+model DeadlineExtensionRequest {
+  id                String                      @id @default(cuid())
+  milestoneId       String
+  jobId             String
+  requestedById     String
+  newDeadline       DateTime
+  reason            String
+  status            DeadlineExtensionStatus     @default(PENDING)
+  clientApprovedAt  DateTime?
+  freelancerApprovedAt DateTime?
+  rejectedBy        String?
+  rejectionReason   String?
+  onChainTxHash     String?
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  milestone   Milestone @relation("MilestoneExtensions", fields: [milestoneId], references: [id], onDelete: Cascade)
+  job         Job       @relation("DeadlineExtensions", fields: [jobId], references: [id], onDelete: Cascade)
+  requestedBy User      @relation("ExtensionRequests", fields: [requestedById], references: [id])
+  rejectedByUser User?  @relation("ExtensionRejections", fields: [rejectedBy], references: [id])
+
+  @@index([milestoneId])
+  @@index([jobId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model Application {

@@ -5,7 +5,9 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 import { useAuth } from "@/context/AuthContext";
+import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/components/Toast";
+import WalletAddress from "@/components/WalletAddress";
 import {
   User,
   Settings,
@@ -25,6 +27,7 @@ import {
   Pencil,
   Trash2,
   Images,
+  Wallet,
 } from "lucide-react";
 import { PortfolioItem } from "@/types";
 
@@ -46,6 +49,7 @@ interface FormErrors {
 
 export default function SettingsPage() {
   const { user, token, isLoading: authLoading, updateUser } = useAuth();
+  const { address, connect, signMessage, isConnecting } = useWallet();
   const { toast } = useToast();
   const router = useRouter();
 
@@ -58,7 +62,9 @@ export default function SettingsPage() {
   const [email, setEmail] = useState(user?.email ?? "");
   const [bio, setBio] = useState(user?.bio ?? "");
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? "");
-  const [role, setRole] = useState<"CLIENT" | "FREELANCER">(user?.role ?? "FREELANCER");
+  const [role, setRole] = useState<"CLIENT" | "FREELANCER">(
+    user?.role === "CLIENT" || user?.role === "FREELANCER" ? user.role : "FREELANCER",
+  );
   const [skills, setSkills] = useState<string[]>(user?.skills ?? []);
   const [newSkill, setNewSkill] = useState("");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -82,6 +88,7 @@ export default function SettingsPage() {
   const [regenerateTotp, setRegenerateTotp] = useState("");
   const [twoFALoading, setTwoFALoading] = useState(false);
   const [copiedRecovery, setCopiedRecovery] = useState(false);
+  const [walletLoading, setWalletLoading] = useState(false);
 
   // ─── Portfolio State ─────────────────────────────────────────────────────────
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
@@ -117,6 +124,11 @@ export default function SettingsPage() {
         setRole(data.role ?? "FREELANCER");
         setSkills(data.skills ?? []);
         setTwoFAEnabled(data.twoFactorEnabled ?? false);
+        updateUser({
+          walletAddress: data.walletAddress ?? null,
+          email: data.email ?? undefined,
+          authMethods: data.authMethods,
+        });
       } catch {
         if (!user) {
           toast.error("Failed to load profile data.");
@@ -499,6 +511,53 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleLinkWallet() {
+    if (!token || !user) return;
+    setWalletLoading(true);
+    try {
+      let publicKey = address;
+      if (!publicKey) {
+        publicKey = await connect();
+      }
+      if (!publicKey) {
+        toast.error("Select a wallet to link.");
+        return;
+      }
+      const message = `Link Stellar wallet ${publicKey} to StellarMarket account ${user.id} at ${Date.now()}`;
+      const signature = await signMessage(message);
+      const res = await axios.post(
+        `${API_URL}/auth/wallet/link`,
+        { publicKey, message, signature },
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      updateUser(res.data.user);
+      toast.success("Wallet linked.");
+    } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      toast.error(error.response?.data?.error || error.message || "Failed to link wallet.");
+    } finally {
+      setWalletLoading(false);
+    }
+  }
+
+  async function handleUnlinkWallet() {
+    if (!token) return;
+    const confirmed = window.confirm("Unlink this wallet from your account?");
+    if (!confirmed) return;
+
+    setWalletLoading(true);
+    try {
+      const res = await axios.delete(`${API_URL}/auth/wallet/link`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      updateUser(res.data.user);
+      toast.success("Wallet unlinked.");
+    } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      toast.error(error.response?.data?.error || "Failed to unlink wallet.");
+    } finally {
+      setWalletLoading(false);
+    }
+  }
+
   function copyRecoveryCodes() {
     if (recoveryCodesPending?.length) {
       navigator.clipboard.writeText(recoveryCodesPending.join("\n"));
@@ -854,6 +913,63 @@ export default function SettingsPage() {
               <ShieldCheck size={20} />
               Security
             </h2>
+
+            <div className="rounded-lg border border-theme-border bg-theme-bg p-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-theme-heading">
+                    <Wallet size={16} />
+                    Authentication methods
+                  </h3>
+                  <p className="text-xs text-theme-text">Keep at least one sign-in method connected.</p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex flex-col gap-2 rounded-lg border border-theme-border bg-theme-card p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-theme-heading">Email</p>
+                    <p className="text-xs text-theme-text">
+                      {user?.authMethods?.email || user?.email ? user.email : "No email login linked"}
+                    </p>
+                  </div>
+                  <span className={`w-fit rounded-full border px-2.5 py-1 text-xs ${
+                    user?.authMethods?.email || user?.email
+                      ? "border-theme-success/30 bg-theme-success/10 text-theme-success"
+                      : "border-theme-warning/30 bg-theme-warning/10 text-theme-warning"
+                  }`}>
+                    {user?.authMethods?.email || user?.email ? "Linked" : "Not linked"}
+                  </span>
+                </div>
+
+                <div className="flex flex-col gap-3 rounded-lg border border-theme-border bg-theme-card p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-theme-heading">Wallet</p>
+                    <WalletAddress address={user?.walletAddress} className="mt-1" />
+                  </div>
+                  {user?.walletAddress ? (
+                    <button
+                      type="button"
+                      onClick={handleUnlinkWallet}
+                      disabled={walletLoading}
+                      className="w-fit rounded-lg border border-red-600/50 px-3 py-2 text-sm text-red-400 hover:bg-red-900/20 disabled:opacity-60"
+                    >
+                      {walletLoading ? "Updating..." : "Unlink"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleLinkWallet}
+                      disabled={walletLoading || isConnecting}
+                      className="btn-primary flex w-fit items-center gap-2 text-sm disabled:opacity-60"
+                    >
+                      {walletLoading || isConnecting ? <Loader2 size={14} className="animate-spin" /> : <Wallet size={14} />}
+                      Link wallet
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
 
             {recoveryCodesPending && recoveryCodesPending.length > 0 ? (
               <div className="space-y-4 rounded-lg border border-amber-600/40 bg-amber-950/30 p-4">

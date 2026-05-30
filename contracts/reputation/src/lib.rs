@@ -139,8 +139,27 @@ pub enum ReputationTier {
 }
 
 #[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Badge {
+    None = 0,
+    Bronze = 1,
+    Silver = 2,
+    Gold = 3,
+}
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum DisputeOutcome {
+    Won = 0,
+    Lost = 1,
+    MaliciousFiling = 2,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Badge {
+pub struct AwardedBadge {
     pub badge_type: ReputationTier,
     pub awarded_at: u64,
 }
@@ -519,7 +538,7 @@ impl ReputationContract {
 
         // Get existing badges to check if this tier badge already exists
         let badges_key = DataKey::Badges(reviewee.clone());
-        let mut badges: Vec<Badge> = env
+        let mut badges: Vec<AwardedBadge> = env
             .storage()
             .persistent()
             .get(&badges_key)
@@ -529,7 +548,7 @@ impl ReputationContract {
         let has_tier_badge = badges.iter().any(|b| b.badge_type == new_tier);
 
         if !has_tier_badge && new_tier != ReputationTier::None {
-            let badge = Badge {
+            let badge = AwardedBadge {
                 badge_type: new_tier,
                 awarded_at: env.ledger().timestamp(),
             };
@@ -902,6 +921,63 @@ impl ReputationContract {
         env.events().publish(
             (symbol_short!("reput"), Symbol::new(&env, "reputation_slashed")),
             (user, job_id, amount, reason),
+        );
+
+        Ok(())
+    }
+
+    /// Apply dispute outcome to a user's reputation score. Callable only by the configured dispute contract.
+    /// Updates reputation based on outcome:
+    /// - Won: +50 points
+    /// - Lost: -100 points
+    /// - MaliciousFiling: -250 points
+    pub fn apply_dispute_outcome(
+        env: Env,
+        user: Address,
+        outcome: DisputeOutcome,
+    ) -> Result<(), ReputationError> {
+        require_not_paused(&env)?;
+
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeContract)
+            .ok_or(ReputationError::NotInitialized)?;
+        dispute_contract.require_auth();
+
+        let score_change = match outcome {
+            DisputeOutcome::Won => 50,
+            DisputeOutcome::Lost => -100,
+            DisputeOutcome::MaliciousFiling => -250,
+        };
+
+        let rep_key = DataKey::Reputation(user.clone());
+        let mut reputation: UserReputation = env
+            .storage()
+            .persistent()
+            .get(&rep_key)
+            .unwrap_or(UserReputation {
+                user: user.clone(),
+                total_score: 0,
+                total_weight: 0,
+                review_count: 0,
+            });
+
+        if score_change > 0 {
+            reputation.total_score = reputation.total_score.saturating_add(score_change as u64);
+        } else {
+            reputation.total_score = reputation.total_score.saturating_sub((-score_change) as u64);
+        }
+
+        env.storage().persistent().set(&rep_key, &reputation);
+        bump_reputation_ttl(&env, &user);
+
+        // Update leaderboard with the user's new rating
+        Self::update_leaderboard(&env, &user);
+
+        env.events().publish(
+            (symbol_short!("reput"), Symbol::new(&env, "dispute_outcome")),
+            (user, outcome, score_change),
         );
 
         Ok(())
@@ -1303,9 +1379,9 @@ impl ReputationContract {
     }
 
     /// Get all badges awarded to a user.
-    pub fn get_badges(env: Env, user: Address) -> Vec<Badge> {
+    pub fn get_badges(env: Env, user: Address) -> Vec<AwardedBadge> {
         let badges_key = DataKey::Badges(user);
-        let badges: Option<Vec<Badge>> = env.storage().persistent().get(&badges_key);
+        let badges: Option<Vec<AwardedBadge>> = env.storage().persistent().get(&badges_key);
         match badges {
             Some(list) => {
                 env.storage().persistent().extend_ttl(
@@ -1316,6 +1392,34 @@ impl ReputationContract {
                 list
             }
             None => Vec::new(&env),
+        }
+    }
+
+    /// Get the current badge for a user based on their score.
+    /// Badges are computed dynamically from score:
+    /// - Bronze: score ≥ 100
+    /// - Silver: score ≥ 500
+    /// - Gold: score ≥ 2000
+    /// Returns None if the user has no reputation or score < 100.
+    pub fn get_badge(env: Env, user: Address) -> Option<Badge> {
+        let rep_key = DataKey::Reputation(user.clone());
+        let reputation: Option<UserReputation> = env.storage().persistent().get(&rep_key);
+        
+        match reputation {
+            Some(rep) => {
+                bump_reputation_ttl(&env, &user);
+                let score = rep.total_score;
+                if score >= 2000 {
+                    Some(Badge::Gold)
+                } else if score >= 500 {
+                    Some(Badge::Silver)
+                } else if score >= 100 {
+                    Some(Badge::Bronze)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
     }
 
@@ -1693,5 +1797,184 @@ mod tests {
             &99,
             &String::from_str(&env, "late appeal"),
         );
+    }
+
+    #[test]
+    fn test_get_badge() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ReputationContract);
+        let client = ReputationContractClient::new(&env, &contract_id);
+
+        let user = Address::generate(&env);
+
+        // Test no badge for user with no reputation
+        assert_eq!(client.get_badge(&user), None);
+
+        // Test Bronze badge (score >= 100)
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &DataKey::Reputation(user.clone()),
+                &UserReputation {
+                    user: user.clone(),
+                    total_score: 100,
+                    total_weight: 10,
+                    review_count: 1,
+                },
+            );
+        });
+        assert_eq!(client.get_badge(&user), Some(Badge::Bronze));
+
+        // Test Silver badge (score >= 500)
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &DataKey::Reputation(user.clone()),
+                &UserReputation {
+                    user: user.clone(),
+                    total_score: 500,
+                    total_weight: 50,
+                    review_count: 5,
+                },
+            );
+        });
+        assert_eq!(client.get_badge(&user), Some(Badge::Silver));
+
+        // Test Gold badge (score >= 2000)
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &DataKey::Reputation(user.clone()),
+                &UserReputation {
+                    user: user.clone(),
+                    total_score: 2000,
+                    total_weight: 200,
+                    review_count: 20,
+                },
+            );
+        });
+        assert_eq!(client.get_badge(&user), Some(Badge::Gold));
+
+        // Test no badge for score < 100
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &DataKey::Reputation(user.clone()),
+                &UserReputation {
+                    user: user.clone(),
+                    total_score: 99,
+                    total_weight: 10,
+                    review_count: 1,
+                },
+            );
+        });
+        assert_eq!(client.get_badge(&user), None);
+    }
+
+    #[test]
+    fn test_apply_dispute_outcome() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ReputationContract);
+        let client = ReputationContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&vec![&env, admin.clone()], &1, &0);
+
+        let dispute_contract = Address::generate(&env);
+        client.set_dispute_contract(&admin, &dispute_contract);
+
+        let user = Address::generate(&env);
+
+        // Initialize user with some reputation
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &DataKey::Reputation(user.clone()),
+                &UserReputation {
+                    user: user.clone(),
+                    total_score: 500,
+                    total_weight: 50,
+                    review_count: 5,
+                },
+            );
+        });
+
+        // Test Won outcome (+50 points)
+        env.as_contract(&dispute_contract, || {
+            client.apply_dispute_outcome(&user, &DisputeOutcome::Won);
+        });
+        let rep = client.get_reputation(&user);
+        assert_eq!(rep.total_score, 550);
+
+        // Test Lost outcome (-100 points)
+        env.as_contract(&dispute_contract, || {
+            client.apply_dispute_outcome(&user, &DisputeOutcome::Lost);
+        });
+        let rep = client.get_reputation(&user);
+        assert_eq!(rep.total_score, 450);
+
+        // Test MaliciousFiling outcome (-250 points)
+        env.as_contract(&dispute_contract, || {
+            client.apply_dispute_outcome(&user, &DisputeOutcome::MaliciousFiling);
+        });
+        let rep = client.get_reputation(&user);
+        assert_eq!(rep.total_score, 200);
+
+        // Test that score doesn't go below zero
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &DataKey::Reputation(user.clone()),
+                &UserReputation {
+                    user: user.clone(),
+                    total_score: 100,
+                    total_weight: 10,
+                    review_count: 1,
+                },
+            );
+        });
+        env.as_contract(&dispute_contract, || {
+            client.apply_dispute_outcome(&user, &DisputeOutcome::MaliciousFiling);
+        });
+        let rep = client.get_reputation(&user);
+        assert_eq!(rep.total_score, 0); // Saturates at 0
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #8)")]
+    fn test_apply_dispute_outcome_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ReputationContract);
+        let client = ReputationContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&vec![&env, admin.clone()], &1, &0);
+
+        let dispute_contract = Address::generate(&env);
+        client.set_dispute_contract(&admin, &dispute_contract);
+
+        let user = Address::generate(&env);
+        let unauthorized = Address::generate(&env);
+
+        // Try to call from unauthorized address
+        env.as_contract(&unauthorized, || {
+            client.apply_dispute_outcome(&user, &DisputeOutcome::Won);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #9)")]
+    fn test_apply_dispute_outcome_no_dispute_contract() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ReputationContract);
+        let client = ReputationContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&vec![&env, admin.clone()], &1, &0);
+
+        let user = Address::generate(&env);
+
+        // Try to call without dispute contract set
+        client.apply_dispute_outcome(&user, &DisputeOutcome::Won);
     }
 }

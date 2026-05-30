@@ -30,6 +30,7 @@ router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
         walletAddress: true,
         email: true,
         emailVerified: true,
+        password: true,
         bio: true,
         avatarUrl: true,
         role: true,
@@ -45,7 +46,14 @@ router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    res.json(user);
+    const { password: _password, ...safeUser } = user;
+    res.json({
+      ...safeUser,
+      authMethods: {
+        email: Boolean(user.email && user.password),
+        wallet: Boolean(user.walletAddress),
+      },
+    });
   } catch (error) {
     logger.error({ err: error }, "Get current user error");
     res.status(500).json({ error: "Internal server error." });

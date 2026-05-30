@@ -22,11 +22,14 @@ export async function generateMetadata({
   params: { id: string };
 }): Promise<Metadata> {
   const profile = await getProfile(params.id);
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://stellarmarket.io";
+  const canonical = `${baseUrl}/profile/${params.id}`;
 
   if (!profile) {
     return {
       title: "Profile Not Found | StellarMarket",
       description: "The requested profile could not be found.",
+      alternates: { canonical },
     };
   }
 
@@ -34,21 +37,24 @@ export async function generateMetadata({
   const description =
     profile.bio?.substring(0, 160) ||
     `Check out ${profile.username}'s profile on StellarMarket.`;
+  const image = profile.avatarUrl ?? `${baseUrl}/og-image.png`;
 
   return {
     title,
     description,
+    alternates: { canonical },
     openGraph: {
       title,
       description,
-      images: profile.avatarUrl ? [profile.avatarUrl] : [],
+      url: canonical,
       type: "profile",
-      username: profile.username,
+      images: [{ url: image, width: 1200, height: 630, alt: profile.username }],
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title,
       description,
+      images: [image],
     },
   };
 }

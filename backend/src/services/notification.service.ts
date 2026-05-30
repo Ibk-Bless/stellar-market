@@ -308,6 +308,8 @@ export class NotificationService {
       switch (type) {
         case "DISPUTE_RAISED":
           return pref?.emailDisputeOpened ?? true;
+        case "DISPUTE_RESOLVED":
+          return pref?.emailDisputeOpened ?? true;
         case "MILESTONE_APPROVED":
           return pref?.emailMilestoneApproved ?? true;
         case "PAYMENT_RELEASED":
@@ -330,6 +332,8 @@ export class NotificationService {
       switch (type) {
         case "DISPUTE_RAISED":
           return "dispute.opened" as const;
+        case "DISPUTE_RESOLVED":
+          return "dispute.resolved" as const;
         case "MILESTONE_APPROVED":
           return "milestone.approved" as const;
         case "PAYMENT_RELEASED":
@@ -349,10 +353,14 @@ export class NotificationService {
         event,
         title,
         message,
+        outcome: metadata?.outcome,
         actionUrl,
       });
     } catch (error) {
-      logger.error({ err: error, userId, type }, "Failed to send notification email");
+      logger.error(
+        { err: error, userId, type },
+        "Failed to send notification email",
+      );
     }
   }
 

@@ -655,7 +655,7 @@ impl DisputeContract {
 
         // Parties involved cannot vote
         if voter == dispute.client || voter == dispute.freelancer {
-            return Err(DisputeError::InvalidParty);
+            return Err(DisputeError::ConflictOfInterest);
         }
 
         // Check if voter is excluded due to conflict of interest

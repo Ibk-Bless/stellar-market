@@ -4,6 +4,7 @@ import { logger } from "../lib/logger";
 import { renderPasswordResetEmail } from "../templates/email/password-reset";
 import { renderVerificationEmail } from "../templates/email/verification";
 import { renderDisputeOpenedEmail } from "../templates/email/dispute-opened";
+import { renderDisputeResolvedEmail } from "../templates/email/dispute-resolved";
 import { renderMilestoneApprovedEmail } from "../templates/email/milestone-approved";
 import { renderPaymentReleasedEmail } from "../templates/email/payment-released";
 import { renderApplicationAcceptedEmail } from "../templates/email/application-accepted";
@@ -28,7 +29,10 @@ export class EmailService {
     });
   }
 
-  static async sendPasswordResetEmail(to: string, token: string): Promise<void> {
+  static async sendPasswordResetEmail(
+    to: string,
+    token: string,
+  ): Promise<void> {
     const resetUrl = `${config.frontendUrl}/auth/reset-password?token=${token}`;
     await this.sendHtml({
       to,
@@ -41,19 +45,28 @@ export class EmailService {
     to: string;
     event:
       | "dispute.opened"
+      | "dispute.resolved"
       | "milestone.approved"
       | "payment.released"
       | "application.accepted";
     title: string;
     message: string;
+    outcome?: string;
     actionUrl?: string;
   }): Promise<void> {
-    const { to, event, title, message, actionUrl } = params;
+    const { to, event, title, message, outcome, actionUrl } = params;
 
     const html = (() => {
       switch (event) {
         case "dispute.opened":
           return renderDisputeOpenedEmail({ title, message, actionUrl });
+        case "dispute.resolved":
+          return renderDisputeResolvedEmail({
+            title,
+            message,
+            outcome,
+            actionUrl,
+          });
         case "milestone.approved":
           return renderMilestoneApprovedEmail({ title, message, actionUrl });
         case "payment.released":
@@ -92,4 +105,3 @@ export class EmailService {
     }
   }
 }
-

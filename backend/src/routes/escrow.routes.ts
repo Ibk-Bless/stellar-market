@@ -132,6 +132,50 @@ router.post("/init-approve", authenticate, asyncHandler(async (req: AuthRequest,
 }));
 
 /**
+ * Request XDR to cancel a funded job and refund the remaining escrow balance.
+ */
+router.post("/init-cancel", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { jobId } = req.body;
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    include: { client: true },
+  });
+
+  if (!job || !job.contractJobId) {
+    return res.status(404).json({ error: "On-chain job not found." });
+  }
+
+  if (job.clientId !== req.userId) {
+    return res.status(403).json({ error: "Only the client can cancel this job." });
+  }
+
+  const xdr = await ContractService.buildCancelJobTx(job.client.walletAddress, job.contractJobId);
+  res.json({ xdr });
+}));
+
+/**
+ * Request XDR to claim a refund after the auto-refund deadline has passed.
+ */
+router.post("/init-refund", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { jobId } = req.body;
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    include: { client: true },
+  });
+
+  if (!job || !job.contractJobId) {
+    return res.status(404).json({ error: "On-chain job not found." });
+  }
+
+  if (job.clientId !== req.userId) {
+    return res.status(403).json({ error: "Only the client can claim a refund." });
+  }
+
+  const xdr = await ContractService.buildClaimRefundTx(job.client.walletAddress, job.contractJobId);
+  res.json({ xdr });
+}));
+
+/**
  * Request XDR to extend a milestone deadline on-chain.
  */
 router.post("/init-extend-deadline", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -444,6 +488,16 @@ router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, r
     await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
     await invalidateCacheKey(generateJobCacheKey(jobId));
   } else if (type === "REJECT_REVISION" && jobId) {
+    await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
+    await invalidateCacheKey(generateJobCacheKey(jobId));
+  } else if ((type === "CANCEL_JOB" || type === "CLAIM_REFUND") && jobId) {
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "CANCELLED",
+        escrowStatus: EscrowStatus.CANCELLED,
+      },
+    });
     await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
     await invalidateCacheKey(generateJobCacheKey(jobId));
   }

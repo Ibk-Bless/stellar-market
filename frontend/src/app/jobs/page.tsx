@@ -8,6 +8,7 @@ import JobCardSkeleton from "@/components/skeletons/JobCardSkeleton";
 import FilterSidebar from "@/components/FilterSidebar";
 import EmptyState from "@/components/EmptyState";
 import { useJobFilters } from "@/hooks/useJobFilters";
+import { useSavedJobs } from "@/hooks/useSavedJobs";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { useLiveJobFeed } from "@/hooks/useLiveJobFeed";
 import { useAuth } from "@/context/AuthContext";
@@ -28,6 +29,7 @@ function JobsContent() {
     activeCount,
     postedAfterDate,
   } = useJobFilters();
+  const { savedJobIds, toggleSavedJob } = useSavedJobs();
 
   const [jobs, setJobs] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
@@ -44,6 +46,7 @@ function JobsContent() {
   // Store the filter "signature" so we can detect when filters change (reset to page 1)
   const filterKey = JSON.stringify({
     debouncedSearch,
+    category: filters.category,
     skills: filters.skills,
     status: filters.status,
     minBudget: filters.minBudget,
@@ -61,6 +64,7 @@ function JobsContent() {
       };
       if (filters.sort !== "newest") params.sort = filters.sort;
       if (debouncedSearch) params.search = debouncedSearch;
+      if (filters.category !== "All") params.category = filters.category;
       if (filters.skills.length) params.skills = filters.skills.join(",");
       if (filters.status.length) params.status = filters.status.join(",");
       if (filters.minBudget) params.minBudget = Number(filters.minBudget);
@@ -135,6 +139,18 @@ function JobsContent() {
     clearPending();
     setTimeout(() => setNewJobIds(new Set()), 3000);
   }, [pendingJobs, clearPending]);
+
+  const handleTagClick = useCallback(
+    (tag: string, type: "category" | "skill") => {
+      if (type === "category") {
+        updateFilter("category", tag);
+      } else {
+        toggleArrayFilter("skills", tag);
+      }
+      setDrawerOpen(false);
+    },
+    [toggleArrayFilter, updateFilter],
+  );
 
   const { sentinelRef } = useInfiniteScroll({
     onLoadMore: fetchNextPage,
@@ -237,7 +253,14 @@ function JobsContent() {
                     key={job.id}
                     className={newJobIds.has(job.id) ? "animate-fade-down ring-2 ring-stellar-blue/40 rounded-xl" : ""}
                   >
-                    <JobCard job={job} index={i} />
+                    <JobCard
+                      job={job}
+                      index={i}
+                      searchTerm={debouncedSearch}
+                      isSaved={savedJobIds.has(job.id)}
+                      onToggleSave={toggleSavedJob}
+                      onTagClick={handleTagClick}
+                    />
                   </div>
                 ))}
               </div>

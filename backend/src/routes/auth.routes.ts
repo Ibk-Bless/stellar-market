@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { generateSecret, verifySync, generateURI } from "otplib";
 import QRCode from "qrcode";
+import { Keypair } from "@stellar/stellar-sdk";
 import { config } from "../config";
 import { validate } from "../middleware/validation";
 import { authenticate, AuthRequest } from "../middleware/auth";
@@ -18,6 +19,8 @@ import {
 import {
   registerSchema,
   loginSchema,
+  walletAuthSchema,
+  walletLinkSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   verifyEmailParamSchema,
@@ -66,6 +69,65 @@ const prisma = new PrismaClient();
 const RESET_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
 /** Single-use recovery codes issued when 2FA is enabled or regenerated (bcrypt-hashed in DB). */
 const RECOVERY_CODE_COUNT = 10;
+const AUTH_MESSAGE_MAX_AGE_MS = 5 * 60 * 1000;
+
+function userPayload(user: {
+  id: string;
+  walletAddress: string | null;
+  username: string;
+  email: string | null;
+  role: "CLIENT" | "FREELANCER" | "ADMIN";
+  emailVerified?: boolean;
+  password?: string | null;
+}) {
+  return {
+    id: user.id,
+    walletAddress: user.walletAddress,
+    username: user.username,
+    email: user.email,
+    role: user.role,
+    emailVerified: user.emailVerified,
+    authMethods: {
+      email: Boolean(user.email && user.password),
+      wallet: Boolean(user.walletAddress),
+    },
+  };
+}
+
+function verifyWalletSignature(publicKey: string, message: string, signature: string) {
+  const timestampMatch = message.match(/at (\d{13})$/);
+  if (!timestampMatch) return false;
+  const timestamp = Number(timestampMatch[1]);
+  if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > AUTH_MESSAGE_MAX_AGE_MS) {
+    return false;
+  }
+
+  try {
+    return Keypair.fromPublicKey(publicKey).verify(
+      crypto.createHash("sha256").update(`Stellar Signed Message:\n${message}`).digest(),
+      Buffer.from(signature, "base64"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function sendSession(res: Response, user: {
+  id: string;
+  walletAddress: string | null;
+  username: string;
+  email: string | null;
+  role: "CLIENT" | "FREELANCER" | "ADMIN";
+  emailVerified?: boolean;
+  password?: string | null;
+}, status = 200) {
+  const token = jwt.sign({ userId: user.id }, config.jwtSecret, {
+    expiresIn: ACCESS_TOKEN_EXPIRY,
+  });
+  const refreshRaw = await issueRefreshToken(user.id);
+  setRefreshCookie(res, refreshRaw);
+  res.status(status).json({ user: userPayload(user), token });
+}
 
 async function generateRecoveryCodeSets(): Promise<{ plain: string[]; hashed: string[] }> {
   const plain: string[] = [];
@@ -154,8 +216,8 @@ router.post(
     const existingUser = await prisma.user.findFirst({
       where: {
         OR: [
-          { walletAddress: stellarAddress },
           { username: name },
+          ...(stellarAddress ? [{ walletAddress: stellarAddress }] : []),
           ...(email ? [{ email }] : []),
         ],
       },
@@ -187,7 +249,7 @@ router.post(
 
     const user = await prisma.user.create({
       data: {
-        walletAddress: stellarAddress,
+        walletAddress: stellarAddress || null,
         email,
         username: name,
         password: hashedPassword,
@@ -204,25 +266,7 @@ router.post(
       await sendVerificationEmail(email, rawToken);
     }
 
-    const token = jwt.sign({ userId: user.id }, config.jwtSecret, {
-      expiresIn: ACCESS_TOKEN_EXPIRY,
-    });
-
-    const refreshRaw = await issueRefreshToken(user.id);
-    setRefreshCookie(res, refreshRaw);
-
-    res.status(201).json({
-      user: {
-        id: user.id,
-        walletAddress: user.walletAddress,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        emailVerified: user.emailVerified,
-        referralCode: user.referralCode,
-      },
-      token,
-    });
+    await sendSession(res, user, 201);
   }),
 );
 
@@ -262,23 +306,90 @@ router.post(
       return res.json({ requiresTwoFactor: true, tempToken });
     }
 
-    const token = jwt.sign({ userId: user.id }, config.jwtSecret, {
-      expiresIn: ACCESS_TOKEN_EXPIRY,
+    await sendSession(res, user);
+  }),
+);
+
+router.post(
+  "/wallet/login",
+  loginRateLimiter,
+  validate({ body: walletAuthSchema }),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { publicKey, message, signature } = req.body;
+    if (!message.includes(`Sign in to StellarMarket with ${publicKey}`) ||
+        !verifyWalletSignature(publicKey, message, signature)) {
+      return res.status(401).json({ error: "Wallet signature verification failed." });
+    }
+
+    let user = await prisma.user.findUnique({ where: { walletAddress: publicKey } });
+    if (!user) {
+      const suffix = crypto.randomBytes(3).toString("hex");
+      user = await prisma.user.create({
+        data: {
+          walletAddress: publicKey,
+          username: `wallet-${publicKey.slice(0, 4).toLowerCase()}-${publicKey.slice(-4).toLowerCase()}-${suffix}`,
+          role: "FREELANCER",
+          emailVerified: false,
+          referralCode: crypto.randomBytes(6).toString("hex"),
+          notificationPreference: { create: {} },
+        },
+      });
+    }
+
+    if (user.isSuspended) {
+      return res.status(403).json({
+        error: "Account suspended.",
+        reason: user.suspendReason || "Your account has been suspended.",
+      });
+    }
+
+    await sendSession(res, user);
+  }),
+);
+
+router.post(
+  "/wallet/link",
+  authenticate,
+  validate({ body: walletLinkSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { publicKey, message, signature } = req.body;
+    if (!message.includes(`Link Stellar wallet ${publicKey} to StellarMarket account ${req.userId}`) ||
+        !verifyWalletSignature(publicKey, message, signature)) {
+      return res.status(401).json({ error: "Wallet signature verification failed." });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { walletAddress: publicKey } });
+    if (existing && existing.id !== req.userId) {
+      return res.status(409).json({ error: "Wallet is already linked to another account." });
+    }
+
+    const user = await prisma.user.update({
+      where: { id: req.userId },
+      data: { walletAddress: publicKey },
     });
 
-    const refreshRaw = await issueRefreshToken(user.id);
-    setRefreshCookie(res, refreshRaw);
+    res.json({ user: userPayload(user) });
+  }),
+);
 
-    res.json({
-      user: {
-        id: user.id,
-        walletAddress: user.walletAddress,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-      },
-      token,
+router.delete(
+  "/wallet/link",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    if (!user.email || !user.password) {
+      return res.status(400).json({ error: "Add an email and password before unlinking your wallet." });
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: req.userId },
+      data: { walletAddress: null },
     });
+
+    res.json({ user: userPayload(updated) });
   }),
 );
 

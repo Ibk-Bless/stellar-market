@@ -20,17 +20,21 @@ import Link from "next/link";
 import axios from "axios";
 import { useWallet } from "@/context/WalletContext";
 import { useAuth } from "@/context/AuthContext";
+import { PAYMENT_TOKENS, TOKEN_EXCHANGE_RATES } from "@/constants/jobs";
 import StatusBadge from "@/components/StatusBadge";
 import ApplyModal from "@/components/ApplyModal";
 import RaiseDisputeModal from "@/components/RaiseDisputeModal";
 import ReviewModal from "@/components/ReviewModal";
 import MilestoneTimeline from "@/components/MilestoneTimeline";
+import MilestoneProgressTracker from "@/components/MilestoneProgressTracker";
+import TransactionConfirmationModal from "@/components/TransactionConfirmationModal";
 import ProposeRevisionModal, {
   type ProposeRevisionMilestoneInput,
 } from "@/components/ProposeRevisionModal";
 import { Job, Application, PaginatedResponse, Review } from "@/types";
 import { parseJobIdFromResult } from "@/utils/stellar";
 import ShareMenu from "@/components/ShareMenu";
+import WalletAddress from "@/components/WalletAddress";
 
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
@@ -43,9 +47,30 @@ function stroopsToXlm(stroops: string): number {
   }
 }
 
+type PendingOnChainAction = {
+  title: string;
+  description: string;
+  actionLabel: string;
+  xdr: string;
+  confirmType:
+    | "CREATE_JOB"
+    | "FUND_JOB"
+    | "APPROVE_MILESTONE"
+    | "SUBMIT_MILESTONE"
+    | "PROPOSE_REVISION"
+    | "ACCEPT_REVISION"
+    | "REJECT_REVISION"
+    | "EXTEND_DEADLINE"
+    | "CANCEL_JOB"
+    | "CLAIM_REFUND";
+  milestoneId?: string;
+  newDeadline?: string;
+  onChainJobId?: number | string;
+};
+
 export default function JobDetailClient() {
   const { id } = useParams();
-  const { address, signAndBroadcastTransaction } = useWallet();
+  const { address, balances, signAndBroadcastTransaction } = useWallet();
   const { user } = useAuth();
   const [job, setJob] = useState<Job | null>(null);
   const [reviews, setReviews] = useState<Review[]>([]);
@@ -74,6 +99,8 @@ export default function JobDetailClient() {
     string | null
   >(null);
   const [extendDeadlineDate, setExtendDeadlineDate] = useState<Record<string, string>>({});
+  const [pendingOnChainAction, setPendingOnChainAction] = useState<PendingOnChainAction | null>(null);
+  const [selectedPaymentToken, setSelectedPaymentToken] = useState<(typeof PAYMENT_TOKENS)[number]>("XLM");
 
   const isClient = Boolean(job && address === job.client.walletAddress);
 
@@ -222,70 +249,44 @@ export default function JobDetailClient() {
     }
   };
 
-  const handleEscrowAction = async (
-    action: "init" | "fund" | "approve" | "submit" | "extend-deadline",
-    milestoneId?: string,
-  ) => {
+  const confirmPendingOnChainAction = async (preparedXdr: string) => {
+    if (!pendingOnChainAction) return;
+
+    const action = pendingOnChainAction;
     setError(null);
     setProcessing(true);
+    if (action.confirmType === "APPROVE_MILESTONE" && action.milestoneId) {
+      setConfirmingMilestoneId(action.milestoneId);
+    }
+
     try {
       const token = localStorage.getItem("token");
-      let endpoint = "";
-      let payload: Record<string, unknown> = { jobId: id };
-      let type = "";
-
-      if (action === "init") {
-        endpoint = "/escrow/init-create";
-        type = "CREATE_JOB";
-      } else if (action === "fund") {
-        endpoint = "/escrow/init-fund";
-        type = "FUND_JOB";
-      } else if (action === "approve") {
-        endpoint = "/escrow/init-approve";
-        payload = { milestoneId };
-        type = "APPROVE_MILESTONE";
-      } else if (action === "submit") {
-        endpoint = "/escrow/init-submit";
-        payload = { milestoneId };
-        type = "SUBMIT_MILESTONE";
-      }
-
-      // 1. Get XDR from backend
-      const res = await axios.post(`${API_URL}${endpoint}`, payload, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      // 2. Sign and broadcast via WalletContext
-      const txResult = await signAndBroadcastTransaction(res.data.xdr);
+      const txResult = await signAndBroadcastTransaction(preparedXdr);
 
       if (!txResult.success) {
         throw new Error(txResult.error || "Transaction failed");
       }
 
-      // 3. Confirm with backend
-      // For CREATE_JOB, parse the on-chain job ID from the contract return value.
-      // For other actions, use the existing contractJobId stored on the job.
-      let onChainJobId: number | string | undefined;
-      if (action === "init") {
+      let onChainJobId: number | string | undefined =
+        action.onChainJobId ?? job?.contractJobId;
+
+      if (action.confirmType === "CREATE_JOB") {
         if (!txResult.resultXdr) {
-          throw new Error("Transaction succeeded but no return value was found — cannot determine on-chain job ID");
+          throw new Error(
+            "Transaction succeeded but no return value was found — cannot determine on-chain job ID",
+          );
         }
         onChainJobId = parseJobIdFromResult(txResult.resultXdr);
-      } else {
-        onChainJobId = job?.contractJobId;
       }
 
       await axios.post(
         `${API_URL}/escrow/confirm-tx`,
         {
           hash: txResult.hash,
-          type,
+          type: action.confirmType,
           jobId: id,
-          milestoneId,
-          newDeadline:
-            action === "extend-deadline"
-              ? extendDeadlineDate[milestoneId!]
-              : undefined,
+          milestoneId: action.milestoneId,
+          newDeadline: action.newDeadline,
           onChainJobId,
         },
         {
@@ -293,16 +294,120 @@ export default function JobDetailClient() {
         },
       );
 
-      // 4. Refresh data
+      setPendingOnChainAction(null);
       await fetchJob();
 
-      if (action === "approve" && milestoneId) {
-        setRecentlyApprovedMilestoneId(milestoneId);
+      if (
+        action.confirmType === "APPROVE_MILESTONE" &&
+        action.milestoneId
+      ) {
+        setRecentlyApprovedMilestoneId(action.milestoneId);
+      }
+
+      if (action.confirmType === "PROPOSE_REVISION") {
+        setProposeRevisionOpen(false);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Action failed.");
     } finally {
+      setConfirmingMilestoneId(null);
       setProcessing(false);
+    }
+  };
+
+  const handleEscrowAction = async (
+    action:
+      | "init"
+      | "fund"
+      | "approve"
+      | "submit"
+      | "extend-deadline"
+      | "cancel"
+      | "refund",
+    milestoneId?: string,
+  ) => {
+    setError(null);
+
+    try {
+      const token = localStorage.getItem("token");
+      let endpoint = "";
+      let payload: Record<string, unknown> = { jobId: id };
+      let type: PendingOnChainAction["confirmType"] = "CREATE_JOB";
+      let title = "";
+      let description = "";
+      let actionLabel = "Confirm";
+
+      if (action === "init") {
+        endpoint = "/escrow/init-create";
+        type = "CREATE_JOB";
+        title = "Initialize escrow";
+        description = "Deploy the job to the on-chain escrow contract.";
+        actionLabel = "Confirm initialize";
+      } else if (action === "fund") {
+        endpoint = "/escrow/init-fund";
+        payload = { jobId: id, paymentToken: selectedPaymentToken };
+        type = "FUND_JOB";
+        title = "Fund escrow";
+        description = "Lock the job budget into the escrow contract.";
+        actionLabel = "Confirm funding";
+      } else if (action === "approve") {
+        endpoint = "/escrow/init-approve";
+        payload = { milestoneId };
+        type = "APPROVE_MILESTONE";
+        title = "Approve milestone";
+        description = "Approve the milestone and release the associated funds.";
+        actionLabel = "Confirm approval";
+      } else if (action === "submit") {
+        endpoint = "/escrow/init-submit";
+        payload = { milestoneId };
+        type = "SUBMIT_MILESTONE";
+        title = "Submit milestone";
+        description = "Submit the milestone for client review.";
+        actionLabel = "Confirm submission";
+      } else if (action === "extend-deadline") {
+        endpoint = "/escrow/init-extend-deadline";
+        payload = {
+          milestoneId,
+          newDeadline: milestoneId ? extendDeadlineDate[milestoneId] : undefined,
+        };
+        type = "EXTEND_DEADLINE";
+        title = "Extend milestone deadline";
+        description = "Request a new deadline for this milestone.";
+        actionLabel = "Confirm extension";
+      } else if (action === "cancel") {
+        endpoint = "/escrow/init-cancel";
+        type = "CANCEL_JOB";
+        title = "Cancel and refund";
+        description =
+          "Cancel the job and return the remaining escrow balance to the client.";
+        actionLabel = "Confirm cancel";
+      } else if (action === "refund") {
+        endpoint = "/escrow/init-refund";
+        type = "CLAIM_REFUND";
+        title = "Claim refund";
+        description =
+          "Claim the refundable balance after the job deadline and grace period.";
+        actionLabel = "Confirm refund";
+      }
+
+      const res = await axios.post(`${API_URL}${endpoint}`, payload, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      setPendingOnChainAction({
+        title,
+        description,
+        actionLabel,
+        xdr: res.data.xdr,
+        confirmType: type,
+        milestoneId,
+        newDeadline:
+          action === "extend-deadline" && milestoneId
+            ? extendDeadlineDate[milestoneId]
+            : undefined,
+      });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Action failed.");
     }
   };
 
@@ -358,119 +463,11 @@ export default function JobDetailClient() {
   };
 
   const handleSubmitMilestone = async (milestoneId: string) => {
-    setError(null);
-    setActioningMilestoneId(milestoneId);
-    try {
-      const token =
-        localStorage.getItem("stellarmarket_jwt") ??
-        localStorage.getItem("token");
-
-      if (!token) {
-        throw new Error("Please log in again.");
-      }
-
-      const res = await axios.put(
-        `${API_URL}/milestones/${milestoneId}/submit`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
-      const txResult = await signAndBroadcastTransaction(res.data.xdr);
-      if (!txResult.success) {
-        throw new Error(txResult.error || "Transaction failed");
-      }
-
-      await axios.post(
-        `${API_URL}/escrow/confirm-tx`,
-        {
-          hash: txResult.hash,
-          type: "SUBMIT_MILESTONE",
-          jobId: id,
-          milestoneId,
-        },
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
-      await fetchJob();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Action failed.");
-    } finally {
-      setActioningMilestoneId(null);
-    }
+    await handleEscrowAction("submit", milestoneId);
   };
 
   const handleApproveMilestone = async (milestoneId: string) => {
-    setError(null);
-    setActioningMilestoneId(milestoneId);
-    const previousMilestones = job?.milestones ?? [];
-    setJob((prev) =>
-      prev
-        ? {
-            ...prev,
-            milestones: prev.milestones.map((m) =>
-              m.id === milestoneId ? { ...m, status: "APPROVED" } : m,
-            ),
-          }
-        : prev,
-    );
-    setConfirmingMilestoneId(milestoneId);
-    try {
-      const token =
-        localStorage.getItem("stellarmarket_jwt") ??
-        localStorage.getItem("token");
-
-      if (!token) {
-        throw new Error("Please log in again.");
-      }
-
-      const res = await axios.put(
-        `${API_URL}/milestones/${milestoneId}/approve`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
-      const txResult = await signAndBroadcastTransaction(res.data.xdr);
-      if (!txResult.success) {
-        throw new Error(txResult.error || "Transaction failed");
-      }
-
-      await axios.post(
-        `${API_URL}/escrow/confirm-tx`,
-        {
-          hash: txResult.hash,
-          type: "APPROVE_MILESTONE",
-          jobId: id,
-          milestoneId,
-        },
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
-      await fetchJob();
-      setRecentlyApprovedMilestoneId(milestoneId);
-    } catch (err: unknown) {
-      // Roll back optimistic milestone status if on-chain confirmation fails.
-      setJob((prev) =>
-        prev
-          ? {
-              ...prev,
-              milestones: prev.milestones.map((m) =>
-                m.id === milestoneId
-                  ? {
-                      ...m,
-                      status:
-                        previousMilestones.find((pm) => pm.id === milestoneId)
-                          ?.status ?? m.status,
-                    }
-                  : m,
-              ),
-            }
-          : prev,
-      );
-      setError(err instanceof Error ? err.message : "Action failed.");
-    } finally {
-      setConfirmingMilestoneId(null);
-      setActioningMilestoneId(null);
-    }
+    await handleEscrowAction("approve", milestoneId);
   };
 
   const handleRevisionEscrow = async (
@@ -478,48 +475,46 @@ export default function JobDetailClient() {
     milestones?: ProposeRevisionMilestoneInput[],
   ) => {
     setError(null);
-    setProcessing(true);
     try {
       const token = localStorage.getItem("token");
       let endpoint = "";
-      let type = "";
+      let type: PendingOnChainAction["confirmType"] = "PROPOSE_REVISION";
+      let title = "";
+      let description = "";
       const payload: Record<string, unknown> = { jobId: id };
 
       if (action === "propose") {
         endpoint = "/escrow/init-propose-revision";
         type = "PROPOSE_REVISION";
         payload.milestones = milestones;
+        title = "Propose revision";
+        description = "Submit revised milestones and budget to the on-chain escrow.";
       } else if (action === "accept") {
         endpoint = "/escrow/init-accept-revision";
         type = "ACCEPT_REVISION";
+        title = "Accept revision";
+        description = "Accept the pending revision proposal on-chain.";
       } else {
         endpoint = "/escrow/init-reject-revision";
         type = "REJECT_REVISION";
+        title = "Reject revision";
+        description = "Reject the pending revision proposal on-chain.";
       }
 
       const res = await axios.post(`${API_URL}${endpoint}`, payload, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      const txResult = await signAndBroadcastTransaction(res.data.xdr);
-      if (!txResult.success) {
-        throw new Error(txResult.error || "Transaction failed");
-      }
-
-      await axios.post(
-        `${API_URL}/escrow/confirm-tx`,
-        { hash: txResult.hash, type, jobId: id },
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
+      setPendingOnChainAction({
+        title,
+        description,
+        actionLabel: action === "reject" ? "Confirm rejection" : "Confirm revision",
+        xdr: res.data.xdr,
+        confirmType: type,
+      });
       setProposeRevisionOpen(false);
-      await fetchJob();
     } catch (err: unknown) {
-      setError(
-        err instanceof Error ? err.message : "Revision transaction failed.",
-      );
-    } finally {
-      setProcessing(false);
+      setError(err instanceof Error ? err.message : "Revision transaction failed.");
     }
   };
 
@@ -534,6 +529,20 @@ export default function JobDetailClient() {
           : new Date(job.deadline).toISOString(),
       }));
     }, [job]);
+
+  const selectedTokenBalance = useMemo(() => {
+    const match = balances.find((entry) => entry.asset === selectedPaymentToken);
+    return Number.parseFloat(match?.balance ?? "0");
+  }, [balances, selectedPaymentToken]);
+
+  const fundingRequirement = useMemo(
+    () => job?.budget ?? 0,
+    [job],
+  );
+
+  const selectedTokenAmount = fundingRequirement / TOKEN_EXCHANGE_RATES[selectedPaymentToken];
+  const hasSufficientSelectedTokenBalance =
+    selectedTokenBalance >= selectedTokenAmount;
 
   if (loading) {
     return (
@@ -602,6 +611,18 @@ export default function JobDetailClient() {
         </div>
       )}
 
+      <TransactionConfirmationModal
+        isOpen={Boolean(pendingOnChainAction)}
+        title={pendingOnChainAction?.title ?? "Confirm transaction"}
+        description={pendingOnChainAction?.description ?? ""}
+        actionLabel={pendingOnChainAction?.actionLabel ?? "Confirm"}
+        transactionXdr={pendingOnChainAction?.xdr ?? null}
+        onClose={() => setPendingOnChainAction(null)}
+        onConfirm={async (preparedXdr) => {
+          await confirmPendingOnChainAction(preparedXdr);
+        }}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Content */}
         <div className="lg:col-span-2">
@@ -622,7 +643,7 @@ export default function JobDetailClient() {
           <div className="flex flex-wrap items-center gap-4 mb-8">
             <ShareMenu
               title={job.title}
-              url={typeof window !== "undefined" ? window.location.href : ""}
+              url={`/jobs/${id}`}
               description={`Check out this job on StellarMarket: ${job.title}`}
             />
           </div>
@@ -633,6 +654,29 @@ export default function JobDetailClient() {
             </h2>
             <div className="text-theme-text whitespace-pre-line text-sm leading-relaxed">
               {job.description}
+            </div>
+          </div>
+
+          <div className="card mb-8">
+            <h2 className="text-lg font-semibold text-theme-heading mb-4">
+              Skills and category
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              <Link
+                href={`/jobs?category=${encodeURIComponent(job.category)}`}
+                className="inline-flex items-center gap-1 rounded-full border border-stellar-purple/20 bg-stellar-purple/10 px-3 py-1 text-xs font-medium text-stellar-purple transition-colors hover:bg-stellar-purple/20"
+              >
+                {job.category}
+              </Link>
+              {job.skills.map((skill) => (
+                <Link
+                  key={skill}
+                  href={`/jobs?skills=${encodeURIComponent(skill)}`}
+                  className="inline-flex items-center gap-1 rounded-full border border-theme-border bg-theme-bg px-3 py-1 text-xs font-medium text-theme-text transition-colors hover:border-stellar-blue hover:text-stellar-blue"
+                >
+                  {skill}
+                </Link>
+              ))}
             </div>
           </div>
 
@@ -709,6 +753,13 @@ export default function JobDetailClient() {
           )}
 
           {/* Milestones */}
+          <div className="mb-8">
+            <MilestoneProgressTracker
+              milestones={job.milestones}
+              jobTitle={job.title}
+            />
+          </div>
+
           <div className="card">
             <h2 className="text-lg font-semibold text-theme-heading mb-4">
               Milestones
@@ -1017,38 +1068,159 @@ export default function JobDetailClient() {
               Posted {new Date(job.createdAt).toLocaleDateString()}
             </div>
 
-            {/* Escrow Status Actions */}
-            {isClient && !job.contractJobId && job.status === "IN_PROGRESS" && (
-              <button
-                disabled={processing}
-                onClick={() => handleEscrowAction("init")}
-                className="btn-primary w-full flex items-center justify-center gap-2 mb-4"
-              >
-                {processing ? (
-                  <Loader2 className="animate-spin" size={18} />
-                ) : (
-                  <ShieldCheck size={18} />
-                )}
-                Initialize On-Chain Escrow
-              </button>
-            )}
+            <div className="mb-4 rounded-xl border border-theme-border bg-theme-card/60 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.24em] text-theme-text-muted">
+                    Escrow flow
+                  </p>
+                  <h3 className="mt-1 text-sm font-semibold text-theme-heading">
+                    Deposit, release, and refund
+                  </h3>
+                </div>
+                <ShieldCheck className="text-stellar-blue" size={18} />
+              </div>
 
-            {isClient &&
-              job.contractJobId &&
-              job.escrowStatus === "UNFUNDED" && (
-                <button
-                  disabled={processing}
-                  onClick={() => handleEscrowAction("fund")}
-                  className="btn-secondary w-full flex items-center justify-center gap-2 mb-4 border-stellar-blue text-stellar-blue hover:bg-stellar-blue/10"
-                >
-                  {processing ? (
-                    <Loader2 className="animate-spin" size={18} />
-                  ) : (
-                    <DollarSign size={18} />
+              <div className="mt-4 space-y-2 text-sm text-theme-text">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full border border-theme-border bg-theme-bg text-xs font-semibold text-theme-heading">
+                    1
+                  </span>
+                  Client deposits the contract budget on-chain.
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full border border-theme-border bg-theme-bg text-xs font-semibold text-theme-heading">
+                    2
+                  </span>
+                  Approved milestones release funds to the freelancer.
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full border border-theme-border bg-theme-bg text-xs font-semibold text-theme-heading">
+                    3
+                  </span>
+                  If work stalls, the client can refund the remaining balance.
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <div className="rounded-xl border border-theme-border bg-theme-bg/60 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-theme-text-muted">
+                        Payment token
+                      </p>
+                      <h4 className="mt-1 text-sm font-semibold text-theme-heading">
+                        Choose your escrow asset
+                      </h4>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-theme-text">
+                      <span className="rounded-full border border-theme-border px-2 py-1">
+                        1 XLM ≈ 1 USDC
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {PAYMENT_TOKENS.map((token) => (
+                      <button
+                        key={token}
+                        type="button"
+                        onClick={() => setSelectedPaymentToken(token)}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                          selectedPaymentToken === token
+                            ? "border-stellar-blue bg-stellar-blue/10 text-stellar-blue"
+                            : "border-theme-border bg-theme-card text-theme-text hover:border-stellar-blue hover:text-stellar-blue"
+                        }`}
+                      >
+                        {token}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-theme-text">
+                    <span>
+                      Wallet balance: {selectedTokenBalance.toLocaleString(undefined, {
+                        maximumFractionDigits: 2,
+                      })} {selectedPaymentToken}
+                    </span>
+                    <span className="rounded-full border border-theme-border px-2 py-1">
+                      Required: {selectedTokenAmount.toLocaleString(undefined, {
+                        maximumFractionDigits: 2,
+                      })} {selectedPaymentToken}
+                    </span>
+                  </div>
+
+                  {!hasSufficientSelectedTokenBalance && (
+                    <p className="mt-2 text-xs text-theme-error">
+                      Insufficient {selectedPaymentToken} balance for this escrow deposit.
+                    </p>
                   )}
-                  Fund Escrow with XLM
-                </button>
-              )}
+                </div>
+
+                {isClient &&
+                  !job.contractJobId &&
+                  job.status === "IN_PROGRESS" && (
+                    <button
+                      disabled={processing}
+                      onClick={() => handleEscrowAction("init")}
+                      className="btn-primary w-full flex items-center justify-center gap-2"
+                    >
+                      {processing ? (
+                        <Loader2 className="animate-spin" size={18} />
+                      ) : (
+                        <ShieldCheck size={18} />
+                      )}
+                      Initialize On-Chain Escrow
+                    </button>
+                  )}
+
+                {isClient &&
+                  job.contractJobId &&
+                  job.escrowStatus === "UNFUNDED" && (
+                    <button
+                      disabled={processing || !hasSufficientSelectedTokenBalance}
+                      onClick={() => handleEscrowAction("fund")}
+                      className="btn-secondary w-full flex items-center justify-center gap-2 border-stellar-blue text-stellar-blue hover:bg-stellar-blue/10"
+                    >
+                      {processing ? (
+                        <Loader2 className="animate-spin" size={18} />
+                      ) : (
+                        <DollarSign size={18} />
+                      )}
+                      Fund Escrow with {selectedPaymentToken}
+                    </button>
+                  )}
+
+                {isClient && job.contractJobId && job.status === "IN_PROGRESS" && (
+                  <div className="grid gap-2">
+                    <button
+                      disabled={processing}
+                      onClick={() => handleEscrowAction("cancel")}
+                      className="btn-secondary w-full flex items-center justify-center gap-2 border-theme-error text-theme-error hover:bg-theme-error/10 text-sm"
+                    >
+                      {processing ? (
+                        <Loader2 className="animate-spin" size={18} />
+                      ) : (
+                        <XCircle size={18} />
+                      )}
+                      Cancel and refund remaining balance
+                    </button>
+                    <button
+                      disabled={processing}
+                      onClick={() => handleEscrowAction("refund")}
+                      className="btn-secondary w-full flex items-center justify-center gap-2 border-stellar-purple text-stellar-purple hover:bg-stellar-purple/10 text-sm"
+                    >
+                      {processing ? (
+                        <Loader2 className="animate-spin" size={18} />
+                      ) : (
+                        <DollarSign size={18} />
+                      )}
+                      Claim refund after deadline
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* Apply section — freelancers only, non-owners */}
             {user?.role === "FREELANCER" &&
@@ -1152,10 +1324,7 @@ export default function JobDetailClient() {
                 <div className="font-medium text-theme-heading">
                   {job.client.username}
                 </div>
-                <div className="text-xs text-theme-text">
-                  {job.client.walletAddress.slice(0, 8)}...
-                  {job.client.walletAddress.slice(-8)}
-                </div>
+                <WalletAddress address={job.client.walletAddress} />
               </div>
             </div>
             <p className="text-sm text-theme-text mb-4">{job.client.bio}</p>

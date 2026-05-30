@@ -74,8 +74,6 @@ function StarRow({ rating }: { rating: number }) {
 export default function PublicProfileClient({ profile }: { profile: PublicProfile }) {
   const [lightbox, setLightbox] = useState<PortfolioItem | null>(null);
 
-  const pageUrl = typeof window !== "undefined" ? window.location.href : "";
-
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       {/* ── Header ── */}
@@ -103,7 +101,7 @@ export default function PublicProfileClient({ profile }: { profile: PublicProfil
             </span>
             <ShareMenu
               title={`${profile.username} on StellarMarket`}
-              url={pageUrl}
+              url={`/profile/${profile.username}`}
               description={`Check out ${profile.username}'s freelancer profile on StellarMarket`}
             />
           </div>

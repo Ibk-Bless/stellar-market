@@ -416,10 +416,10 @@ impl EscrowContract {
             (count, proposer, action),
         );
 
-        // Auto-execute if threshold is 1
+        // Auto-execute if threshold is 1 and time-lock not active
         let threshold: u32 = env.storage().instance().get(&DataKey::MultiSigThreshold).unwrap_or(1);
         if threshold == 1 && now >= execution_not_before {
-            Self::execute_proposal(&env, count)?;
+            Self::execute_proposal_internal(&env, count)?;
         }
 
         Ok(count)
@@ -456,13 +456,28 @@ impl EscrowContract {
 
         let threshold: u32 = env.storage().instance().get(&DataKey::MultiSigThreshold).unwrap_or(1);
         if proposal.approvals.len() >= threshold {
-            Self::execute_proposal(&env, proposal_id)?;
+            let not_before: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::MultiSigExecutionNotBefore(proposal_id))
+                .unwrap_or(proposal.created_at);
+            if env.ledger().timestamp() >= not_before {
+                Self::execute_proposal_internal(&env, proposal_id)?;
+            }
         }
 
         Ok(())
     }
 
-    fn execute_proposal(env: &Env, proposal_id: u64) -> Result<(), EscrowError> {
+    pub fn execute_proposal(env: Env, caller: Address, proposal_id: u64) -> Result<(), EscrowError> {
+        caller.require_auth();
+        if !is_signer(&env, &caller) {
+            return Err(EscrowError::SignerNotFound);
+        }
+        Self::execute_proposal_internal(&env, proposal_id)
+    }
+
+    fn execute_proposal_internal(env: &Env, proposal_id: u64) -> Result<(), EscrowError> {
         let mut proposal: MultiSigProposal = env.storage().instance().get(&DataKey::MultiSigProposal(proposal_id))
             .ok_or(EscrowError::MultiSigProposalNotFound)?;
 
@@ -472,6 +487,11 @@ impl EscrowContract {
 
         if env.ledger().timestamp() > proposal.created_at + PROPOSAL_TTL {
             return Err(EscrowError::ProposalExpired);
+        }
+
+        let threshold: u32 = env.storage().instance().get(&DataKey::MultiSigThreshold).unwrap_or(1);
+        if proposal.approvals.len() < threshold {
+            return Err(EscrowError::Unauthorized);
         }
 
         let not_before: u64 = env

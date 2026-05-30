@@ -1527,3 +1527,40 @@ fn test_delegated_vote_counts_same_as_direct_vote_in_resolution() {
     let status = client.resolve_dispute(&dispute_id);
     assert_eq!(status, DisputeStatus::ResolvedForFreelancer);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")] // DisputeError::ConflictOfInterest = 10
+fn test_conflict_of_interest_voter_is_party() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let dispute_contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &dispute_contract_id);
+
+    let reputation_contract_id = env.register_contract(None, MockReputationContract);
+    let escrow_contract_id = env.register_contract(None, DummyEscrow);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
+
+    let user_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &user_client,
+        &freelancer,
+        &user_client,
+        &String::from_str(&env, "Issue"),
+        &3u32,
+        &None,
+    );
+
+    // Client tries to vote on their own dispute
+    client.cast_vote(
+        &dispute_id,
+        &user_client,
+        &VoteChoice::Client,
+        &String::from_str(&env, "Vote"),
+    );
+}

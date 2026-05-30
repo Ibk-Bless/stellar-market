@@ -43,6 +43,7 @@ export const updateJobSchema = z.object({
 
 export const getJobsQuerySchema = paginationSchema.extend({
   search: z.string().optional(),
+  category: z.string().optional(),
   skill: z.string().optional(),
   skills: z.string().optional(),
   status: z.string().optional(),
@@ -84,6 +85,7 @@ export const updateJobStatusSchema = z.object({
 
 export const getSavedJobsQuerySchema = paginationSchema.extend({
   search: z.string().optional(),
+  category: z.string().optional(),
   skill: z.string().optional(),
   minBudget: z.coerce.number().positive().optional(),
   maxBudget: z.coerce.number().positive().optional(),

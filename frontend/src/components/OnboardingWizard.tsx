@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { X, ChevronRight, Briefcase, Search, User, CheckCircle2, Loader2 } from "lucide-react";
+import { X, ChevronRight, Briefcase, Search, User, CheckCircle2, Loader2, Wallet, ExternalLink } from "lucide-react";
 import axios from "axios";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
-const TOTAL_STEPS = 3;
+const TOTAL_STEPS = 4;
 
 interface StepProps {
   onNext: () => void;
@@ -130,6 +130,113 @@ function StepTwo({
   );
 }
 
+// ─── Step 3: Connect Wallet (issue #475) ─────────────────────────────────────
+
+type WalletState = "idle" | "connecting" | "connected" | "not_installed" | "skipped";
+
+function StepWallet({
+  onNext,
+  onSkip,
+  walletAddress,
+  setWalletAddress,
+}: StepProps & { walletAddress: string | null; setWalletAddress: (a: string | null) => void }) {
+  const [state, setState] = useState<WalletState>("idle");
+  const { token, updateUser } = useAuth();
+
+  const handleConnect = useCallback(async () => {
+    // Detect Freighter via the injected window global
+    const freighter = (window as unknown as { freighter?: { requestAccess: () => Promise<string> } }).freighter;
+    if (!freighter) {
+      setState("not_installed");
+      return;
+    }
+
+    setState("connecting");
+    try {
+      const publicKey = await freighter.requestAccess();
+      setWalletAddress(publicKey);
+      setState("connected");
+
+      // Persist wallet address to user profile
+      try {
+        await axios.patch(
+          `${API}/users/me`,
+          { walletAddress: publicKey },
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        updateUser({ walletAddress: publicKey });
+      } catch {
+        // Profile update failure is non-blocking — key is stored in local state
+      }
+    } catch {
+      // User rejected or error occurred
+      setState("idle");
+    }
+  }, [token, updateUser, setWalletAddress]);
+
+  const truncate = (addr: string) => `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+
+  return (
+    <div>
+      <div className="w-12 h-12 rounded-full bg-stellar-blue/10 flex items-center justify-center mb-4">
+        <Wallet size={24} className="text-stellar-blue" />
+      </div>
+      <h2 className="text-xl font-bold text-theme-heading mb-1">Connect your wallet</h2>
+      <p className="text-theme-text text-sm mb-5">
+        Link a Stellar wallet to fund jobs and receive payments. You can also do this later from Settings.
+      </p>
+
+      {state === "not_installed" && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3 mb-4 text-sm text-amber-400">
+          <p className="font-semibold mb-1">Freighter not detected</p>
+          <p className="mb-2">Install the Freighter browser extension to connect a Stellar wallet.</p>
+          <a
+            href="https://freighter.app"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 underline hover:no-underline"
+          >
+            Get Freighter <ExternalLink size={12} />
+          </a>
+        </div>
+      )}
+
+      {state === "connected" && walletAddress && (
+        <div className="rounded-lg bg-green-500/10 border border-green-500/30 p-3 mb-4 flex items-center gap-2 text-sm text-green-400">
+          <CheckCircle2 size={16} className="shrink-0" />
+          <span>Connected: <span className="font-mono">{truncate(walletAddress)}</span></span>
+        </div>
+      )}
+
+      <div className="flex gap-3">
+        {state === "connected" ? (
+          <button onClick={onNext} className="btn-primary flex items-center gap-2">
+            Continue <ChevronRight size={16} />
+          </button>
+        ) : (
+          <button
+            onClick={handleConnect}
+            disabled={state === "connecting"}
+            className="btn-primary flex items-center gap-2 disabled:opacity-60"
+          >
+            {state === "connecting" ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Wallet size={16} />
+            )}
+            {state === "connecting" ? "Connecting…" : "Connect Freighter"}
+          </button>
+        )}
+        <button onClick={onSkip} className="btn-secondary text-sm">
+          Skip for now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 4: Done ─────────────────────────────────────────────────────────────
+
 function StepThree({ onSkip, role }: { onSkip: () => void; role: string }) {
   const isClient = role === "CLIENT";
   return (
@@ -172,6 +279,7 @@ export default function OnboardingWizard() {
   const [step, setStep] = useState(1);
   const [bio, setBio] = useState(user?.bio ?? "");
   const [skills, setSkills] = useState<string[]>(user?.skills ?? []);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [open, setOpen] = useState(false);
 
@@ -254,7 +362,15 @@ export default function OnboardingWizard() {
             isSaving={isSaving}
           />
         )}
-        {step === 3 && <StepThree onSkip={handleSkip} role={user.role} />}
+        {step === 3 && (
+          <StepWallet
+            onNext={() => setStep(4)}
+            onSkip={() => setStep(4)}
+            walletAddress={walletAddress}
+            setWalletAddress={setWalletAddress}
+          />
+        )}
+        {step === 4 && <StepThree onSkip={handleSkip} role={user.role} />}
       </div>
     </div>
   );

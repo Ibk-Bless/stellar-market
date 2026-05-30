@@ -9,6 +9,7 @@ import {
   EscrowStatus,
 } from "@prisma/client";
 import { createError } from "../middleware/error";
+import { NotificationService } from "./notification.service";
 
 const prisma = new PrismaClient();
 
@@ -114,6 +115,25 @@ export class DisputeService {
         status: JobStatus.DISPUTED,
         escrowStatus: "DISPUTED",
       },
+    });
+
+    // Send notifications to both parties
+    await NotificationService.sendNotification({
+      userId: dispute.clientId,
+      type: "DISPUTE_RAISED",
+      title: "Dispute Raised",
+      message: `A dispute has been raised for job "${dispute.job.title}". You have been notified as the client.`,
+      metadata: { disputeId: dispute.id, jobId, initiatorId },
+      skipBatching: true,
+    });
+
+    await NotificationService.sendNotification({
+      userId: dispute.freelancerId,
+      type: "DISPUTE_RAISED",
+      title: "Dispute Raised",
+      message: `A dispute has been raised for job "${dispute.job.title}". You have been notified as the freelancer.`,
+      metadata: { disputeId: dispute.id, jobId, initiatorId },
+      skipBatching: true,
     });
 
     return dispute;
@@ -307,6 +327,103 @@ export class DisputeService {
   }
 
   /**
+   * Get user's dispute history (initiated or involved)
+   */
+  static async getUserDisputeHistory(
+    userId: string,
+    filter: "all" | "initiated" | "involved" = "all",
+    sortBy: "recent" | "oldest" = "recent",
+    pagination: { page: number; limit: number } = { page: 1, limit: 20 },
+  ) {
+    const { page, limit } = pagination;
+    const skip = (page - 1) * limit;
+
+    // Build where clause based on filter
+    let where: any = {
+      OR: [
+        { clientId: userId },
+        { freelancerId: userId },
+        { initiatorId: userId },
+      ],
+    };
+
+    if (filter === "initiated") {
+      where = { initiatorId: userId };
+    } else if (filter === "involved") {
+      where = {
+        AND: [
+          { initiatorId: { not: userId } },
+          {
+            OR: [{ clientId: userId }, { freelancerId: userId }],
+          },
+        ],
+      };
+    }
+
+    // Determine sort order
+    const orderBy =
+      sortBy === "recent"
+        ? { createdAt: "desc" as const }
+        : { createdAt: "asc" as const };
+
+    const [disputes, total] = await Promise.all([
+      prisma.dispute.findMany({
+        where,
+        include: {
+          job: { select: { id: true, title: true, budget: true } },
+          client: {
+            select: {
+              id: true,
+              username: true,
+              walletAddress: true,
+              avatarUrl: true,
+            },
+          },
+          freelancer: {
+            select: {
+              id: true,
+              username: true,
+              walletAddress: true,
+              avatarUrl: true,
+            },
+          },
+          initiator: {
+            select: {
+              id: true,
+              username: true,
+              walletAddress: true,
+              avatarUrl: true,
+            },
+          },
+          _count: { select: { votes: true } },
+        },
+        orderBy,
+        skip,
+        take: limit,
+      }),
+      prisma.dispute.count({ where }),
+    ]);
+
+    // Transform disputes to include jobTitle and otherPartyName
+    const transformedDisputes = disputes.map((dispute) => {
+      // Determine the other party (not the current user)
+      let otherParty = dispute.client;
+      if (dispute.clientId === userId) {
+        otherParty = dispute.freelancer;
+      }
+
+      return {
+        ...dispute,
+        jobTitle: dispute.job.title,
+        otherPartyName: otherParty.username,
+        otherPartyAvatar: otherParty.avatarUrl,
+      };
+    });
+
+    return transformedDisputes;
+  }
+
+  /**
    * Get disputes with filtering and pagination
    */
   static async getDisputes(
@@ -439,6 +556,31 @@ export class DisputeService {
       });
     }
 
+    // Notify both parties about the new vote
+    const disputeDetails = await prisma.dispute.findUnique({
+      where: { id: disputeId },
+      include: { job: true },
+    });
+
+    if (disputeDetails) {
+      const voteChoice = choice === "CLIENT" ? "the client" : "the freelancer";
+      await NotificationService.sendNotification({
+        userId: dispute.clientId,
+        type: "DISPUTE_RAISED",
+        title: "New Vote on Your Dispute",
+        message: `A community member voted in favor of ${voteChoice} on the dispute for "${disputeDetails.job.title}".`,
+        metadata: { disputeId, jobId: dispute.jobId, voterId },
+      });
+
+      await NotificationService.sendNotification({
+        userId: dispute.freelancerId,
+        type: "DISPUTE_RAISED",
+        title: "New Vote on Your Dispute",
+        message: `A community member voted in favor of ${voteChoice} on the dispute for "${disputeDetails.job.title}".`,
+        metadata: { disputeId, jobId: dispute.jobId, voterId },
+      });
+    }
+
     return vote;
   }
 
@@ -484,6 +626,30 @@ export class DisputeService {
         status: JobStatus.COMPLETED,
         escrowStatus: "COMPLETED",
       },
+    });
+
+    // Send resolution notifications to both parties
+    const outcomeMessage =
+      outcome === "CLIENT"
+        ? "The dispute has been resolved in favor of the client."
+        : "The dispute has been resolved in favor of the freelancer.";
+
+    await NotificationService.sendNotification({
+      userId: updatedDispute.clientId,
+      type: "DISPUTE_RESOLVED",
+      title: "Dispute Resolved",
+      message: `${outcomeMessage} Job: "${updatedDispute.job.title}"`,
+      metadata: { disputeId, jobId: dispute.jobId, outcome },
+      skipBatching: true,
+    });
+
+    await NotificationService.sendNotification({
+      userId: updatedDispute.freelancerId,
+      type: "DISPUTE_RESOLVED",
+      title: "Dispute Resolved",
+      message: `${outcomeMessage} Job: "${updatedDispute.job.title}"`,
+      metadata: { disputeId, jobId: dispute.jobId, outcome },
+      skipBatching: true,
     });
 
     return updatedDispute;

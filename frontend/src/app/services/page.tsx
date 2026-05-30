@@ -6,7 +6,7 @@ import Link from "next/link";
 import axios from "axios";
 import ServiceCard from "@/components/ServiceCard";
 import EmptyState from "@/components/EmptyState";
-import { useURLStateManager } from "@/components/URLStateManager";
+import { useServiceFilters } from "@/hooks/useServiceFilters";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { ServiceListing, PaginatedResponse } from "@/types";
 
@@ -48,13 +48,15 @@ const SORT_OPTIONS = [
 ];
 
 function ServicesContent() {
-  const { filters, updateFilters, clearFilters } = useURLStateManager({
-    category: 'All',
-    search: '',
-    minPrice: undefined,
-    maxPrice: undefined,
-    sortBy: 'newest'
-  });
+  const {
+    filters,
+    debouncedSearch,
+    updateFilter,
+    updateSearch,
+    toggleSkill,
+    clearAll,
+    activeCount,
+  } = useServiceFilters();
 
   const [services, setServices] = useState<ServiceListing[]>([]);
   const [total, setTotal] = useState(0);
@@ -63,9 +65,6 @@ function ServicesContent() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [skills, setSkills] = useState<string[]>([]);
-
-  const activeCount = Object.values(filters).filter(v => v && v !== 'All' && v !== 'newest').length + skills.length;
 
   const filterKey = JSON.stringify({
     debouncedSearch,
@@ -114,8 +113,7 @@ function ServicesContent() {
     } finally {
       setLoading(false);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterKey]);
+  }, [buildParams]);
 
   const fetchNextPage = useCallback(async () => {
     if (loadingMore || !hasMore) return;
@@ -129,7 +127,8 @@ function ServicesContent() {
       setServices((prev) => [...prev, ...res.data.data]);
       setPage(nextPage);
       setHasMore(
-        res.data.data.length === SERVICES_PER_PAGE && nextPage < res.data.totalPages,
+        res.data.data.length === SERVICES_PER_PAGE &&
+          nextPage < res.data.totalPages,
       );
     } catch {
       // keep existing results on error
@@ -143,7 +142,7 @@ function ServicesContent() {
       prevFilterKey.current = filterKey;
     }
     fetchFirstPage();
-  }, [filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filterKey, fetchFirstPage]);
 
   const { sentinelRef } = useInfiniteScroll({
     onLoadMore: fetchNextPage,
@@ -151,6 +150,14 @@ function ServicesContent() {
     isLoading: loadingMore,
     rootMargin: 200,
   });
+
+  const hasActiveSearch =
+    debouncedSearch ||
+    filters.category !== "All" ||
+    filters.skills.length > 0 ||
+    filters.minPrice ||
+    filters.maxPrice ||
+    filters.sort !== "newest";
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -160,7 +167,7 @@ function ServicesContent() {
             Discover Services
           </h1>
           <p className="text-theme-text">
-            Find the perfect professional for your next project.
+            Find the right freelancer for your next project.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -182,7 +189,6 @@ function ServicesContent() {
         </div>
       </div>
 
-      {/* Search Bar */}
       <div className="relative mb-6">
         <Search
           className="absolute left-3 top-1/2 -translate-y-1/2 text-theme-text"
@@ -198,11 +204,9 @@ function ServicesContent() {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6">
-        {/* Filter Sidebar */}
         <div
           className={`lg:w-64 shrink-0 space-y-6 ${filtersOpen ? "block" : "hidden lg:block"}`}
         >
-          {/* Category Filter */}
           <div>
             <h3 className="text-sm font-semibold text-theme-heading mb-3">
               Category
@@ -224,7 +228,6 @@ function ServicesContent() {
             </div>
           </div>
 
-          {/* Skills Filter */}
           <div>
             <h3 className="text-sm font-semibold text-theme-heading mb-3">
               Skills
@@ -246,7 +249,6 @@ function ServicesContent() {
             </div>
           </div>
 
-          {/* Budget Range */}
           <div>
             <h3 className="text-sm font-semibold text-theme-heading mb-3">
               Budget Range (XLM)
@@ -272,7 +274,6 @@ function ServicesContent() {
             </div>
           </div>
 
-          {/* Sort */}
           <div>
             <h3 className="text-sm font-semibold text-theme-heading mb-3">
               Sort By
@@ -290,7 +291,6 @@ function ServicesContent() {
             </select>
           </div>
 
-          {/* Active Filters Summary & Clear */}
           {activeCount > 0 && (
             <div>
               <div className="flex flex-wrap gap-2 mb-3">
@@ -319,7 +319,6 @@ function ServicesContent() {
           )}
         </div>
 
-        {/* Service Listings */}
         <div className="flex-1">
           {loading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -341,10 +340,8 @@ function ServicesContent() {
                 ))}
               </div>
 
-              {/* Sentinel element — IntersectionObserver target */}
               <div ref={sentinelRef} aria-hidden="true" />
 
-              {/* Loading spinner while fetching next page */}
               {loadingMore && (
                 <div className="flex justify-center py-6">
                   <Loader2
@@ -355,14 +352,12 @@ function ServicesContent() {
                 </div>
               )}
 
-              {/* End-of-results message */}
               {!hasMore && !loadingMore && (
                 <p className="text-center text-sm text-theme-text py-6">
                   You&apos;ve seen all {total} service{total !== 1 ? "s" : ""}.
                 </p>
               )}
 
-              {/* Accessible "Load more" fallback button */}
               {hasMore && !loadingMore && (
                 <div className="flex justify-center pt-4 pb-2">
                   <button
@@ -379,20 +374,18 @@ function ServicesContent() {
             <EmptyState
               icon={LayoutGrid}
               title={
-                debouncedSearch || filters.category !== "All" || filters.skills.length > 0
+                hasActiveSearch
                   ? "No services match your search."
                   : "No services listed yet. Be the first!"
               }
               description={
-                debouncedSearch || filters.category !== "All" || filters.skills.length > 0
+                hasActiveSearch
                   ? "Try a different keyword or adjust your filters."
                   : "Offer your skills to the Stellar community by posting a service."
               }
               action={{ label: "Post a Service", href: "/services/new" }}
               secondaryAction={
-                activeCount > 0
-                  ? { label: "Clear Filters", onClick: clearAll }
-                  : undefined
+                activeCount > 0 ? { label: "Clear Filters", onClick: clearAll } : undefined
               }
             />
           )}

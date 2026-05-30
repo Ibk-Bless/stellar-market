@@ -2,13 +2,15 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, Tag, Loader2 } from "lucide-react";
+import { Plus, Trash2, Tag, Loader2, ArrowUp, ArrowDown } from "lucide-react";
 import axios from "axios";
 import { z } from "zod";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/Toast";
+import { useWallet } from "@/context/WalletContext";
+import { JOB_CATEGORIES, JOB_SKILLS, PAYMENT_TOKENS } from "@/constants/jobs";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
 
@@ -51,11 +53,14 @@ type JobFormValues = z.infer<typeof jobSchema>;
 
 export default function PostJobPage() {
   const { user, isLoading } = useAuth();
+  const { balances } = useWallet();
   const router = useRouter();
   const { toast } = useToast();
 
   const [skills, setSkills] = useState<string[]>([]);
   const [skillInput, setSkillInput] = useState("");
+  const [activeSkillIndex, setActiveSkillIndex] = useState(-1);
+  const [paymentToken, setPaymentToken] = useState<(typeof PAYMENT_TOKENS)[number]>("XLM");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const {
@@ -75,10 +80,15 @@ export default function PostJobPage() {
       milestones: [{ title: "", description: "", amount: "", deadline: "" }],
     },
   });
-  const { fields, append, remove } = useFieldArray({
+  const { fields, append, remove, move } = useFieldArray({
     control,
     name: "milestones",
   });
+
+  const moveMilestone = (from: number, to: number) => {
+    if (to < 0 || to >= fields.length) return;
+    move(from, to);
+  };
   const milestones = watch("milestones");
 
   useEffect(() => {
@@ -117,16 +127,50 @@ export default function PostJobPage() {
     [milestones],
   );
 
+  const filteredSkillSuggestions = useMemo(() => {
+    const query = skillInput.trim().toLowerCase();
+    if (!query) return [];
+
+    return JOB_SKILLS.filter(
+      (skill) =>
+        skill.toLowerCase().includes(query) && !skills.includes(skill),
+    ).slice(0, 6);
+  }, [skillInput, skills]);
+  const selectedTokenBalance = useMemo(() => {
+    const entry = balances.find((balance) => balance.asset === paymentToken);
+    return Number.parseFloat(entry?.balance ?? "0");
+  }, [balances, paymentToken]);
+  const selectedTokenRequirement = totalBudget;
+  const hasSufficientTokenBalance = selectedTokenBalance >= selectedTokenRequirement;
+
   const handleAddSkill = () => {
     const trimmed = skillInput.trim();
-    if (trimmed && !skills.includes(trimmed)) {
-      setSkills([...skills, trimmed]);
-      setSkillInput("");
+    if (!trimmed) return;
+
+    const selectedSkill =
+      activeSkillIndex >= 0 && filteredSkillSuggestions[activeSkillIndex]
+        ? filteredSkillSuggestions[activeSkillIndex]
+        : JOB_SKILLS.find(
+            (skill) => skill.toLowerCase() === trimmed.toLowerCase(),
+          ) ?? trimmed;
+
+    if (!skills.includes(selectedSkill)) {
+      setSkills([...skills, selectedSkill]);
     }
+    setSkillInput("");
+    setActiveSkillIndex(-1);
   };
 
   const handleRemoveSkill = (skill: string) => {
     setSkills(skills.filter((s) => s !== skill));
+  };
+
+  const selectSkillSuggestion = (skill: string) => {
+    if (!skills.includes(skill)) {
+      setSkills([...skills, skill]);
+    }
+    setSkillInput("");
+    setActiveSkillIndex(-1);
   };
 
   const onSubmit = async (values: JobFormValues) => {
@@ -145,6 +189,7 @@ export default function PostJobPage() {
           deadline: new Date(values.deadline).toISOString(),
           skills,
           budget: totalBudget,
+          paymentToken,
         },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -229,18 +274,13 @@ export default function PostJobPage() {
           <label className="block text-sm font-medium text-theme-heading mb-2">
             Category
           </label>
-          <select
-            className="input-field"
-            {...register("category")}
-          >
+          <select className="input-field" {...register("category")}>
             <option value="">Select a category</option>
-            <option value="Frontend">Frontend</option>
-            <option value="Backend">Backend</option>
-            <option value="Smart Contract">Smart Contract</option>
-            <option value="Design">Design</option>
-            <option value="Mobile">Mobile</option>
-            <option value="Documentation">Documentation</option>
-            <option value="DevOps">DevOps</option>
+            {JOB_CATEGORIES.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
           </select>
           {errors.category && (
             <p className="mt-1 text-xs text-theme-error">{errors.category.message}</p>
@@ -267,17 +307,30 @@ export default function PostJobPage() {
           <label className="block text-sm font-medium text-theme-heading mb-2">
             Required Skills
           </label>
-          <div className="flex gap-2 mb-3">
+          <div className="relative flex gap-2 mb-3">
             <input
               type="text"
               placeholder="e.g., Rust"
               className="input-field"
               value={skillInput}
-              onChange={(e) => setSkillInput(e.target.value)}
+              onChange={(e) => {
+                setSkillInput(e.target.value);
+                setActiveSkillIndex(0);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
                   handleAddSkill();
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setActiveSkillIndex((index) =>
+                    Math.min(index + 1, filteredSkillSuggestions.length - 1),
+                  );
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setActiveSkillIndex((index) => Math.max(index - 1, 0));
+                } else if (e.key === "Escape") {
+                  setActiveSkillIndex(-1);
                 }
               }}
             />
@@ -288,6 +341,24 @@ export default function PostJobPage() {
             >
               <Plus size={20} />
             </button>
+            {filteredSkillSuggestions.length > 0 && (
+              <div className="absolute left-0 right-14 top-full z-20 mt-2 overflow-hidden rounded-xl border border-theme-border bg-theme-card shadow-2xl">
+                {filteredSkillSuggestions.map((skill, index) => (
+                  <button
+                    key={skill}
+                    type="button"
+                    onClick={() => selectSkillSuggestion(skill)}
+                    className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
+                      index === activeSkillIndex
+                        ? "bg-stellar-blue/10 text-stellar-blue"
+                        : "text-theme-text hover:bg-theme-border/40 hover:text-theme-heading"
+                    }`}
+                  >
+                    <Tag size={14} /> {skill}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             {skills.map((skill) => (
@@ -329,15 +400,40 @@ export default function PostJobPage() {
                   <span className="text-sm font-medium text-stellar-purple">
                     Milestone {index + 1}
                   </span>
-                  {milestones.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeMilestone(index)}
-                      className="text-red-400 hover:text-red-300 transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {fields.length > 1 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => moveMilestone(index, index - 1)}
+                          disabled={index === 0}
+                          aria-label={`Move milestone ${index + 1} up`}
+                          className="text-stellar-blue hover:text-stellar-purple transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <ArrowUp size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveMilestone(index, index + 1)}
+                          disabled={index === fields.length - 1}
+                          aria-label={`Move milestone ${index + 1} down`}
+                          className="text-stellar-blue hover:text-stellar-purple transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        >
+                          <ArrowDown size={16} />
+                        </button>
+                      </>
+                    )}
+                    {milestones.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeMilestone(index)}
+                        aria-label={`Remove milestone ${index + 1}`}
+                        className="text-red-400 hover:text-red-300 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="space-y-3">
                   <input
@@ -404,10 +500,66 @@ export default function PostJobPage() {
           </span>
         </div>
 
+        <div className="card">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.24em] text-theme-text-muted">
+                Payment token
+              </p>
+              <h3 className="mt-1 text-sm font-semibold text-theme-heading">
+                Preview the escrow asset
+              </h3>
+            </div>
+            <span className="rounded-full border border-theme-border px-2.5 py-1 text-xs text-theme-text">
+              1 XLM ≈ 1 USDC
+            </span>
+          </div>
+
+          <div className="flex flex-wrap gap-2 mb-3">
+            {PAYMENT_TOKENS.map((token) => (
+              <button
+                key={token}
+                type="button"
+                onClick={() => setPaymentToken(token)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  paymentToken === token
+                    ? "border-stellar-blue bg-stellar-blue/10 text-stellar-blue"
+                    : "border-theme-border bg-theme-bg text-theme-text hover:border-stellar-blue hover:text-stellar-blue"
+                }`}
+              >
+                {token}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-xs text-theme-text">
+            <span>
+              Wallet balance:{" "}
+              {selectedTokenBalance.toLocaleString(undefined, {
+                maximumFractionDigits: 2,
+              })}{" "}
+              {paymentToken}
+            </span>
+            <span className="rounded-full border border-theme-border px-2 py-1">
+              Required:{" "}
+              {selectedTokenRequirement.toLocaleString(undefined, {
+                maximumFractionDigits: 2,
+              })}{" "}
+              {paymentToken}
+            </span>
+          </div>
+
+          {!hasSufficientTokenBalance && (
+            <p className="mt-3 text-xs text-theme-error">
+              Insufficient {paymentToken} balance to cover this escrow preview.
+            </p>
+          )}
+        </div>
+
         {/* Submit */}
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || !hasSufficientTokenBalance}
           className="btn-primary w-full text-lg h-12 flex items-center justify-center gap-2"
         >
           {submitting ? <Loader2 className="animate-spin" size={24} /> : "Post Job & Fund Escrow"}

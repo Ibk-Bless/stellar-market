@@ -177,6 +177,56 @@ export class ContractService {
   }
 
   /**
+   * Builds an un-signed transaction XDR for cancelling a funded or in-progress job.
+   */
+  static async buildCancelJobTx(clientPublicKey: string, jobId: string) {
+    const server = getRpcServer();
+    const contract = new Contract(contractId);
+    const account = await server.getAccount(clientPublicKey);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          "cancel_job",
+          nativeToScVal(BigInt(jobId)),
+          new Address(clientPublicKey).toScVal(),
+        ),
+      )
+      .setTimeout(0)
+      .build();
+
+    return tx.toXDR();
+  }
+
+  /**
+   * Builds an un-signed transaction XDR for claiming a deadline-based refund.
+   */
+  static async buildClaimRefundTx(clientPublicKey: string, jobId: string) {
+    const server = getRpcServer();
+    const contract = new Contract(contractId);
+    const account = await server.getAccount(clientPublicKey);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          "claim_refund",
+          nativeToScVal(BigInt(jobId)),
+          new Address(clientPublicKey).toScVal(),
+        ),
+      )
+      .setTimeout(0)
+      .build();
+
+    return tx.toXDR();
+  }
+
+  /**
    * Verification function to check transaction status on-chain.
    */
   static async verifyTransaction(hash: string) {

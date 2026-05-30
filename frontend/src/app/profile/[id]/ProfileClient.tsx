@@ -26,6 +26,7 @@ import { useAuth } from "@/context/AuthContext";
 import { ContractService, ReputationResult } from "@/services/ContractService";
 import ShareMenu from "@/components/ShareMenu";
 import ProfileSkeleton from "@/components/skeletons/ProfileSkeleton";
+import WalletAddress from "@/components/WalletAddress";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
 // Base URL without /api for serving static files
@@ -137,10 +138,6 @@ export default function ProfileClient() {
     );
   };
 
-  const truncateAddress = (address: string) => {
-    return `${address.slice(0, 6)}...${address.slice(-4)}`;
-  };
-
   const getProfileCompleteness = (prof: UserProfile) => {
     const steps = [
       { label: "Profile Photo", value: !!prof.avatarUrl, weight: 20 },
@@ -201,7 +198,7 @@ export default function ProfileClient() {
             )}
             <ShareMenu
               title={profile.username}
-              url={typeof window !== "undefined" ? window.location.href : ""}
+              url={`/profile/${profile.id}`}
               description={`Check out ${profile.username}'s profile on StellarMarket`}
             />
           </div>
@@ -231,9 +228,7 @@ export default function ProfileClient() {
           <div className="flex flex-wrap gap-6 text-sm text-theme-text">
             <div className="flex items-center gap-2">
               <ShieldCheck size={18} className="text-stellar-blue" />
-              <span className="font-mono">
-                {truncateAddress(profile.walletAddress)}
-              </span>
+              <WalletAddress address={profile.walletAddress} />
             </div>
             <div className="flex items-center gap-2">
               <Calendar size={18} className="text-stellar-blue" />

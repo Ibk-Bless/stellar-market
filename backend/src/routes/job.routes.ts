@@ -129,7 +129,7 @@ router.get(
    */
   validate({ query: getJobsQuerySchema }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { page = 1, limit = 20, search, skill, skills, status, minBudget, maxBudget, clientId, token, sort, postedAfter, cursor } = (req as any).query;
+  const { page = 1, limit = 20, search, category, skill, skills, status, minBudget, maxBudget, clientId, token, sort, postedAfter, cursor } = (req as any).query;
     // Ensure limit is within bounds
     const safeLimit = Math.min(Math.max(1, Number(limit)), 100);
     const safePage = Math.max(1, Number(page));
@@ -140,6 +140,7 @@ router.get(
       search,
       skill,
       skills,
+      category,
       status,
       minBudget,
       maxBudget,
@@ -161,11 +162,11 @@ router.get(
             { id: string; rank: number }[]
           >`
             SELECT id, ts_rank(
-              to_tsvector('english', title || ' ' || description),
+              to_tsvector('english', title || ' ' || description || ' ' || array_to_string(skills, ' ')),
               plainto_tsquery('english', ${search})
             ) AS rank
             FROM "Job"
-            WHERE to_tsvector('english', title || ' ' || description)
+            WHERE to_tsvector('english', title || ' ' || description || ' ' || array_to_string(skills, ' '))
               @@ plainto_tsquery('english', ${search})
             ORDER BY rank DESC
           `;
@@ -173,9 +174,15 @@ router.get(
           where.id = matchedIds.length > 0 ? { in: matchedIds } : { in: [] };
         } catch {
           // Fallback to plain case-insensitive LIKE search
+          const searchTerms = (search as string)
+            .split(/\s+/)
+            .map((term) => term.trim())
+            .filter(Boolean);
+
           where.OR = [
             { title: { contains: search, mode: "insensitive" } },
             { description: { contains: search, mode: "insensitive" } },
+            ...(searchTerms.length > 0 ? [{ skills: { hasSome: searchTerms } }] : []),
           ];
         }
       }
@@ -192,6 +199,10 @@ router.get(
         }
       } else if (skill) {
         where.skills = { has: skill };
+      }
+
+      if (category) {
+        where.category = { equals: category, mode: "insensitive" };
       }
 
       if (status) {
@@ -469,6 +480,7 @@ router.get(
       page = 1,
       limit = 20,
       search,
+      category,
       skill,
       minBudget,
       maxBudget,
@@ -493,6 +505,10 @@ router.get(
 
     if (skill) {
       jobWhere.skills = { has: skill };
+    }
+
+    if (category) {
+      jobWhere.category = { equals: category, mode: "insensitive" };
     }
 
     if (minBudget || maxBudget) {

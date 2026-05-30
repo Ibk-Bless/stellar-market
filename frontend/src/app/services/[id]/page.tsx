@@ -83,7 +83,7 @@ export default function ServiceDetailPage() {
               </div>
               <ShareMenu 
                 title={service.title}
-                url={typeof window !== "undefined" ? window.location.href : ""}
+                url={`/services/${id}`}
                 description={service.description.slice(0, 140)}
               />
             </div>

@@ -199,7 +199,8 @@ router.get(
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;
-      const includeDeleted = req.query.includeDeleted === "true";
+      // getJobsAdminQuerySchema transforms includeDeleted to a boolean
+      const includeDeleted = (req.query as any).includeDeleted === true || req.query.includeDeleted === "true";
       const skip = (page - 1) * limit;
 
       const where: any = {};

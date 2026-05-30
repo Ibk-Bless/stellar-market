@@ -18,6 +18,33 @@ import {
 const router = Router();
 
 /**
+ * GET /api/disputes/history
+ * Get user's dispute history (initiated or involved)
+ */
+router.get(
+  "/history",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const {
+      filter = "all",
+      sortBy = "recent",
+      page = 1,
+      limit = 20,
+    } = req.query;
+    const userId = req.userId!;
+
+    const disputes = await DisputeService.getUserDisputeHistory(
+      userId,
+      filter as "all" | "initiated" | "involved",
+      sortBy as "recent" | "oldest",
+      { page: Number(page), limit: Number(limit) },
+    );
+
+    res.json(disputes);
+  }),
+);
+
+/**
  * GET /api/disputes
  * Get all disputes with optional filtering and pagination
  */
@@ -184,7 +211,10 @@ router.post(
           "Job participants (client or freelancer) cannot vote on their own dispute.",
       });
     }
-    const data = req.body as { choice: "CLIENT" | "FREELANCER"; reason: string };
+    const data = req.body as {
+      choice: "CLIENT" | "FREELANCER";
+      reason: string;
+    };
 
     const vote = await DisputeService.castVote(
       req.params.id as string,

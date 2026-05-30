@@ -1302,6 +1302,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellar-market-reputation-interface"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellar-strkey"
 version = "0.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

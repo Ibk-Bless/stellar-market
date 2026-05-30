@@ -23,7 +23,7 @@ interface AuthContextType {
   updateUser: (data: Partial<User>) => void;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
 const TOKEN_KEY = "stellarmarket_jwt";

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
-import MobileNavigation from "@/components/MobileNavigation";
 import EmailVerificationBanner from "@/components/EmailVerificationBanner";
 import Footer from "@/components/Footer";
 import Providers from "./providers";
@@ -81,7 +80,6 @@ export default function RootLayout({
       </head>
       <body className={inter.className}>
         <Providers>
-          <MobileNavigation />
           <Navbar />
           <EmailVerificationBanner />
           <main className="min-h-screen">{children}</main>

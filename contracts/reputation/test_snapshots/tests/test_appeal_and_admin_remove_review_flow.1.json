@@ -644,6 +644,9 @@
                 },
                 {
                   "u64": 42
+                },
+                {
+                  "string": "malicious 1-star review"
                 }
               ]
             }

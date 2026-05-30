@@ -17,12 +17,13 @@ import {
   ShieldCheck,
   Unplug,
   Wallet,
+  Bookmark,
   ChevronDown,
   Loader2,
   Gift,
 } from "lucide-react";
 import axios from "axios";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type TouchEvent } from "react";
 import { useWallet, truncateAddress } from "@/context/WalletContext";
 import { useSocket } from "@/context/SocketContext";
 import { useAuth } from "@/context/AuthContext";
@@ -319,6 +320,8 @@ function UnreadBadge() {
 
 export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mobileDrawerRef = useRef<HTMLDivElement>(null);
+  const touchStartXRef = useRef<number | null>(null);
   const { user } = useAuth();
   const pathname = usePathname();
   const isClient = user?.role === "CLIENT";
@@ -326,6 +329,7 @@ export default function Navbar() {
 
   const navLinks = [
     { href: "/jobs", label: isFreelancer ? "Find Work" : "Jobs", icon: Briefcase, hide: isClient },
+    { href: "/saved-jobs", label: "Saved Jobs", icon: Bookmark, hide: !isFreelancer && !isClient },
     { href: "/services", label: "Services", icon: Search },
     { href: "/freelancers", label: "Talent", icon: Users },
     { href: "/disputes", label: "Disputes", icon: ShieldCheck },
@@ -341,6 +345,81 @@ export default function Navbar() {
   const isActive = (path: string) => {
     if (path === "/" && pathname !== "/") return false;
     return pathname?.startsWith(path);
+  };
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileOpen) {
+      document.body.style.overflow = "";
+      return;
+    }
+
+    document.body.style.overflow = "hidden";
+
+    const drawer = mobileDrawerRef.current;
+    const focusableSelectors = [
+      'a[href]',
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(", ");
+
+    const focusableElements = Array.from(
+      drawer?.querySelectorAll<HTMLElement>(focusableSelectors) ?? [],
+    );
+    const firstFocusable = focusableElements[0];
+    const lastFocusable = focusableElements[focusableElements.length - 1];
+
+    firstFocusable?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileOpen(false);
+        return;
+      }
+
+      if (event.key !== "Tab" || focusableElements.length === 0) return;
+
+      if (event.shiftKey) {
+        if (document.activeElement === firstFocusable) {
+          event.preventDefault();
+          lastFocusable?.focus();
+        }
+        return;
+      }
+
+      if (document.activeElement === lastFocusable) {
+        event.preventDefault();
+        firstFocusable?.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = "";
+    };
+  }, [mobileOpen]);
+
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    touchStartXRef.current = event.touches[0]?.clientX ?? null;
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    if (touchStartXRef.current === null) return;
+    const touchEndX = event.changedTouches[0]?.clientX ?? touchStartXRef.current;
+    const deltaX = touchEndX - touchStartXRef.current;
+    touchStartXRef.current = null;
+
+    if (deltaX < -60) {
+      setMobileOpen(false);
+    }
   };
 
   return (
@@ -379,6 +458,9 @@ export default function Navbar() {
           <button
             className="md:hidden text-theme-text"
             onClick={() => setMobileOpen(!mobileOpen)}
+            aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"}
+            aria-expanded={mobileOpen}
+            aria-controls="mobile-navigation-drawer"
           >
             {mobileOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
@@ -398,9 +480,17 @@ export default function Navbar() {
           
           {/* Panel */}
           <div
-            className={`absolute right-0 top-0 h-full w-72 bg-theme-bg border-l border-theme-border p-6 shadow-2xl transition-transform duration-300 ease-in-out ${
+            id="mobile-navigation-drawer"
+            ref={mobileDrawerRef}
+            className={`absolute right-0 top-0 h-full w-72 bg-theme-bg border-l border-theme-border p-6 shadow-2xl transition-transform duration-300 ease-in-out outline-none ${
               mobileOpen ? "translate-x-0" : "translate-x-full"
             }`}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile navigation"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
           >
             {/* Close Button */}
             <div className="flex justify-between items-center mb-10">

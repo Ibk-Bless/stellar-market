@@ -131,6 +131,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ReputationSlashBps"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 500
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "SlashAmount"
                             }
                           ]

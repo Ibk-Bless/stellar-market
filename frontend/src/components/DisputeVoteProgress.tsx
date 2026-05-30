@@ -7,6 +7,7 @@ import { useDisputeStatus } from "@/hooks/useDisputeStatus";
 interface DisputeVoteProgressProps {
   disputeId: string;
   showVoterDetails?: boolean;
+  initialDispute?: any; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 /**
@@ -21,14 +22,17 @@ interface DisputeVoteProgressProps {
  */
 export default function DisputeVoteProgress({ 
   disputeId, 
-  showVoterDetails = false 
+  showVoterDetails = false,
+  initialDispute,
 }: DisputeVoteProgressProps) {
-  const { dispute, isLoading } = useDisputeStatus({ 
+  const { dispute: liveDispute, isLoading: liveLoading } = useDisputeStatus({
     disputeId,
-    enabled: true,
+    enabled: !initialDispute,
     initialInterval: 2000,
     maxInterval: 30000
   });
+  const dispute = initialDispute ?? liveDispute;
+  const isLoading = initialDispute ? false : liveLoading;
 
   const [prevVoteCount, setPrevVoteCount] = useState(0);
   const [isNewVote, setIsNewVote] = useState(false);

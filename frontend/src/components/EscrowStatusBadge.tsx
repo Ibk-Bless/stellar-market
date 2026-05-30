@@ -1,7 +1,7 @@
 "use client";
 
 interface EscrowStatusBadgeProps {
-  status: "UNFUNDED" | "FUNDED" | "COMPLETED" | "CANCELLED" | "DISPUTED";
+  status: "UNFUNDED" | "FUNDED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "DISPUTED";
 }
 
 const statusConfig: Record<string, { label: string; color: string }> = {
@@ -12,6 +12,10 @@ const statusConfig: Record<string, { label: string; color: string }> = {
   FUNDED: {
     label: "Funded",
     color: "bg-theme-success/20 text-theme-success border-theme-success/30",
+  },
+  IN_PROGRESS: {
+    label: "In Progress",
+    color: "bg-stellar-blue/20 text-stellar-blue border-stellar-blue/30",
   },
   DISPUTED: {
     label: "In Dispute",

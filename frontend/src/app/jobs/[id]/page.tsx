@@ -33,7 +33,6 @@ export async function generateMetadata({
   return generateJobMetadata({
     title: job.title,
     description: job.description || "Check out this job on StellarMarket",
-    budget: job.budget || 0,
     id: params.id,
   });
 }
