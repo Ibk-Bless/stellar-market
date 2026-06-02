@@ -7,6 +7,17 @@ use soroban_sdk::{
     Env, String,
 };
 
+// Helper macro to add arbitrators and get assigned ones for a dispute
+macro_rules! setup_arbs_and_get_assigned {
+    ($env:expr, $client:expr, $admin:expr, $dispute_id:expr, $count:expr) => {{
+        for _ in 0..$count {
+            let arb = Address::generate(&$env);
+            $client.add_arbitrator(&$admin, &arb);
+        }
+        $client.get_assigned_arbitrators(&$dispute_id)
+    }};
+}
+
 #[contract]
 pub struct DummyEscrow;
 
@@ -231,10 +242,13 @@ fn test_vote_and_resolve() {
     let freelancer = Address::generate(&env);
 
     client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
-    let voter1 = Address::generate(&env);
-    let voter2 = Address::generate(&env);
-    let voter3 = Address::generate(&env);
-
+    
+    // Add arbitrators
+    for _ in 0..5 {
+        let arb = Address::generate(&env);
+        client.add_arbitrator(&admin, &arb);
+    }
+    
     let dispute_id = client.raise_dispute(
         &1u64,
         &user_client,
@@ -245,21 +259,23 @@ fn test_vote_and_resolve() {
         &None,
     );
 
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
     client.cast_vote(
         &dispute_id,
-        &voter1,
+        &assigned.get(0).unwrap(),
         &VoteChoice::Freelancer,
         &String::from_str(&env, "Work was done"),
     );
     client.cast_vote(
         &dispute_id,
-        &voter2,
+        &assigned.get(1).unwrap(),
         &VoteChoice::Freelancer,
         &String::from_str(&env, "Agree with freelancer"),
     );
     client.cast_vote(
         &dispute_id,
-        &voter3,
+        &assigned.get(2).unwrap(),
         &VoteChoice::Client,
         &String::from_str(&env, "Incomplete work"),
     );
@@ -322,10 +338,11 @@ fn test_tie_break_favor_client() {
     let freelancer = Address::generate(&env);
 
     client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
-    let voter1 = Address::generate(&env);
-    let voter2 = Address::generate(&env);
-    let voter3 = Address::generate(&env);
-    let voter4 = Address::generate(&env);
+    
+    // Add arbitrators
+    for _ in 0..10 {
+        client.add_arbitrator(&admin, &Address::generate(&env));
+    }
 
     let dispute_id = client.raise_dispute(
         &1u64,
@@ -337,27 +354,29 @@ fn test_tie_break_favor_client() {
         &Some(TieBreakMethod::FavorClient),
     );
 
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+
     client.cast_vote(
         &dispute_id,
-        &voter1,
+        &assigned.get(0).unwrap(),
         &VoteChoice::Client,
         &String::from_str(&env, "C1"),
     );
     client.cast_vote(
         &dispute_id,
-        &voter2,
+        &assigned.get(1).unwrap(),
         &VoteChoice::Freelancer,
         &String::from_str(&env, "F1"),
     );
     client.cast_vote(
         &dispute_id,
-        &voter3,
+        &assigned.get(2).unwrap(),
         &VoteChoice::Client,
         &String::from_str(&env, "C2"),
     );
     client.cast_vote(
         &dispute_id,
-        &voter4,
+        &assigned.get(3).unwrap(),
         &VoteChoice::Freelancer,
         &String::from_str(&env, "F2"),
     );
@@ -904,6 +923,14 @@ fn setup_dispute_with_votes(
 
     client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
 
+    // Add arbitrators to pool
+    let mut arbitrators = Vec::new(env);
+    for _ in 0..10 {
+        let arb = Address::generate(env);
+        client.add_arbitrator(&admin, &arb);
+        arbitrators.push_back(arb);
+    }
+
     let dispute_id = client.raise_dispute(
         &1u64,
         &user_client,
@@ -914,23 +941,30 @@ fn setup_dispute_with_votes(
         &None,
     );
 
-    for _i in 0..client_votes {
-        let voter = Address::generate(env);
-        client.cast_vote(
-            &dispute_id,
-            &voter,
-            &VoteChoice::Client,
-            &String::from_str(env, "For client"),
-        );
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    for i in 0..client_votes {
+        if (i as u32) < assigned.len() {
+            let voter = assigned.get(i as u32).unwrap();
+            client.cast_vote(
+                &dispute_id,
+                &voter,
+                &VoteChoice::Client,
+                &String::from_str(env, "For client"),
+            );
+        }
     }
-    for _i in 0..freelancer_votes {
-        let voter = Address::generate(env);
-        client.cast_vote(
-            &dispute_id,
-            &voter,
-            &VoteChoice::Freelancer,
-            &String::from_str(env, "For freelancer"),
-        );
+    for i in 0..freelancer_votes {
+        let idx = client_votes + i;
+        if idx < assigned.len() {
+            let voter = assigned.get(idx).unwrap();
+            client.cast_vote(
+                &dispute_id,
+                &voter,
+                &VoteChoice::Freelancer,
+                &String::from_str(env, "For freelancer"),
+            );
+        }
     }
 
     (
@@ -1482,6 +1516,13 @@ fn setup_initialized_dispute_contract(
     let reputation_contract_id = env.register_contract(None, MockReputationContract);
     let admin = Address::generate(env);
     client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
+    
+    // Add arbitrators to pool
+    for _ in 0..10 {
+        let arb = Address::generate(env);
+        client.add_arbitrator(&admin, &arb);
+    }
+    
     (client, dispute_contract_id, escrow_contract_id, admin)
 }
 
@@ -1792,6 +1833,12 @@ fn setup_malicious_test(
     let admin = Address::generate(env);
     client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
 
+    // Add arbitrators to pool
+    for _ in 0..10 {
+        let arb = Address::generate(env);
+        client.add_arbitrator(&admin, &arb);
+    }
+
     let job_client = Address::generate(env);
     let freelancer = Address::generate(env);
     let dispute_id = client.raise_dispute(
@@ -1922,4 +1969,528 @@ fn test_malicious_filing_event_emitted() {
     assert_eq!(dispute.status, DisputeStatus::MaliciousDisputeFiling);
     // Initiator should be the client (who raised the dispute).
     assert_eq!(dispute.initiator, job_client);
+}
+
+
+// ── Arbitrator voting mechanism tests ─────────────────────────────────────────
+
+#[test]
+fn test_add_arbitrator_to_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    let arbitrator = Address::generate(&env);
+    client.add_arbitrator(&admin, &arbitrator);
+
+    let pool = client.get_arbitrator_pool();
+    assert_eq!(pool.len(), 1);
+    assert!(pool.contains(&arbitrator));
+}
+
+#[test]
+fn test_remove_arbitrator_from_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    let arbitrator1 = Address::generate(&env);
+    let arbitrator2 = Address::generate(&env);
+    
+    client.add_arbitrator(&admin, &arbitrator1);
+    client.add_arbitrator(&admin, &arbitrator2);
+
+    let pool = client.get_arbitrator_pool();
+    assert_eq!(pool.len(), 2);
+
+    client.remove_arbitrator(&admin, &arbitrator1);
+
+    let pool = client.get_arbitrator_pool();
+    assert_eq!(pool.len(), 1);
+    assert!(!pool.contains(&arbitrator1));
+    assert!(pool.contains(&arbitrator2));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")] // NotAdmin
+fn test_add_arbitrator_non_admin_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, _admin) = setup_initialized_dispute_contract(&env);
+
+    let non_admin = Address::generate(&env);
+    let arbitrator = Address::generate(&env);
+    
+    client.add_arbitrator(&non_admin, &arbitrator);
+}
+
+#[test]
+fn test_dispute_assigns_arbitrators() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 10 arbitrators to the pool
+    for _ in 0..10 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &3u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    // Should assign up to 5 arbitrators
+    assert!(assigned.len() <= 5);
+    assert!(assigned.len() > 0);
+    
+    // Assigned arbitrators should not include client or freelancer
+    assert!(!assigned.contains(&job_client));
+    assert!(!assigned.contains(&freelancer));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")] // Unauthorized
+fn test_non_assigned_arbitrator_cannot_vote() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &3u32,
+        &None,
+    );
+
+    // Try to vote with an address not in the assigned arbitrators
+    let non_assigned = Address::generate(&env);
+    client.cast_vote(
+        &dispute_id,
+        &non_assigned,
+        &VoteChoice::Client,
+        &String::from_str(&env, "Vote"),
+    );
+}
+
+#[test]
+fn test_assigned_arbitrator_can_vote() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &3u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    assert!(assigned.len() > 0);
+
+    // First assigned arbitrator should be able to vote
+    let arbitrator = assigned.get(0).unwrap();
+    client.cast_vote(
+        &dispute_id,
+        &arbitrator,
+        &VoteChoice::Client,
+        &String::from_str(&env, "Vote"),
+    );
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.votes_for_client, 1);
+}
+
+#[test]
+fn test_auto_resolve_at_3_vote_majority() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    // Cast 3 votes for freelancer - should auto-resolve
+    for i in 0..3 {
+        let arbitrator = assigned.get(i).unwrap();
+        client.cast_vote(
+            &dispute_id,
+            &arbitrator,
+            &VoteChoice::Freelancer,
+            &String::from_str(&env, "Vote for freelancer"),
+        );
+    }
+
+    // Check that dispute was auto-resolved
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::ResolvedForFreelancer);
+}
+
+#[test]
+fn test_unanimous_vote_5_0() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    // All 5 vote for client
+    for i in 0..assigned.len() {
+        let arbitrator = assigned.get(i).unwrap();
+        client.cast_vote(
+            &dispute_id,
+            &arbitrator,
+            &VoteChoice::Client,
+            &String::from_str(&env, "Vote for client"),
+        );
+    }
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::ResolvedForClient);
+    assert_eq!(dispute.votes_for_client, 5);
+}
+
+#[test]
+fn test_split_vote_3_2_client_wins() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    // 3 vote for client, 2 for freelancer
+    for i in 0..3 {
+        let arbitrator = assigned.get(i).unwrap();
+        client.cast_vote(
+            &dispute_id,
+            &arbitrator,
+            &VoteChoice::Client,
+            &String::from_str(&env, "Vote for client"),
+        );
+    }
+    
+    // Auto-resolved at 3 votes, but let's verify the state
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::ResolvedForClient);
+    assert_eq!(dispute.votes_for_client, 3);
+}
+
+#[test]
+fn test_split_vote_3_2_freelancer_wins() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    // 3 vote for freelancer
+    for i in 0..3 {
+        let arbitrator = assigned.get(i).unwrap();
+        client.cast_vote(
+            &dispute_id,
+            &arbitrator,
+            &VoteChoice::Freelancer,
+            &String::from_str(&env, "Vote for freelancer"),
+        );
+    }
+    
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.status, DisputeStatus::ResolvedForFreelancer);
+    assert_eq!(dispute.votes_for_freelancer, 3);
+}
+
+#[test]
+fn test_vote_cast_event_emitted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    let arbitrator = assigned.get(0).unwrap();
+    
+    client.cast_vote(
+        &dispute_id,
+        &arbitrator,
+        &VoteChoice::Client,
+        &String::from_str(&env, "Vote"),
+    );
+
+    // Verify VoteCast event was emitted
+    let events = env.events().all();
+    let vote_event = events.iter().find(|(_, topics, _)| {
+        if topics.len() >= 2 {
+            let t1: Symbol = topics.get(1).unwrap().into_val(&env);
+            return t1 == symbol_short!("voted");
+        }
+        false
+    });
+    
+    assert!(vote_event.is_some(), "VoteCast event should be emitted");
+}
+
+#[test]
+fn test_dispute_resolved_event_emitted_on_auto_resolve() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    // Cast 3 votes to trigger auto-resolve
+    for i in 0..3 {
+        let arbitrator = assigned.get(i).unwrap();
+        client.cast_vote(
+            &dispute_id,
+            &arbitrator,
+            &VoteChoice::Client,
+            &String::from_str(&env, "Vote"),
+        );
+    }
+
+    // Verify DisputeResolved event was emitted
+    let events = env.events().all();
+    let resolved_event = events.iter().find(|(_, topics, _)| {
+        if topics.len() >= 2 {
+            let t1: Symbol = topics.get(1).unwrap().into_val(&env);
+            return t1 == symbol_short!("resolved");
+        }
+        false
+    });
+    
+    assert!(resolved_event.is_some(), "DisputeResolved event should be emitted on auto-resolve");
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")] // AlreadyVoted
+fn test_arbitrator_cannot_vote_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, admin) = setup_initialized_dispute_contract(&env);
+
+    // Add 5 arbitrators to the pool
+    for _ in 0..5 {
+        let arbitrator = Address::generate(&env);
+        client.add_arbitrator(&admin, &arbitrator);
+    }
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    let arbitrator = assigned.get(0).unwrap();
+    
+    // First vote
+    client.cast_vote(
+        &dispute_id,
+        &arbitrator,
+        &VoteChoice::Client,
+        &String::from_str(&env, "First vote"),
+    );
+
+    // Second vote - should fail
+    client.cast_vote(
+        &dispute_id,
+        &arbitrator,
+        &VoteChoice::Freelancer,
+        &String::from_str(&env, "Second vote"),
+    );
+}
+
+#[test]
+fn test_dispute_with_empty_arbitrator_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _dispute_id, _escrow_id, _admin) = setup_initialized_dispute_contract(&env);
+
+    let job_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    // Raise dispute with empty arbitrator pool
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &job_client,
+        &freelancer,
+        &job_client,
+        &String::from_str(&env, "Issue"),
+        &3u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    
+    // Should have no assigned arbitrators
+    assert_eq!(assigned.len(), 0);
 }

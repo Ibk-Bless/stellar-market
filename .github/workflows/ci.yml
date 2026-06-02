@@ -158,3 +158,27 @@ jobs:
 
       - name: Run contract tests
         run: cargo test
+
+  contracts-fuzz-tests:
+    name: Contracts — Fuzz Tests
+    runs-on: ubuntu-latest
+    needs: contracts-build
+    defaults:
+      run:
+        working-directory: contracts/escrow
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Run fuzz tests (1000+ iterations)
+        run: cargo test --lib fuzz:: -- --test-threads=1 --nocapture

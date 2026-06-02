@@ -16,7 +16,7 @@ import {
   signTransaction,
 } from "@stellar/freighter-api";
 import { rpc, Transaction, Horizon } from "@stellar/stellar-sdk";
-import { Loader2, QrCode, Wallet } from "lucide-react";
+import { Loader2, QrCode, Wallet, Smartphone } from "lucide-react";
 
 interface WalletBalance {
   asset: string;
@@ -29,16 +29,19 @@ interface WalletSession {
   lastActivityAt: number;
 }
 
+type WalletProviderType = "freighter" | "walletconnect" | "lobstr";
+
 interface WalletState {
   address: string | null;
   isConnecting: boolean;
   isFreighterInstalled: boolean | null;
+  isLobstrInstalled: boolean | null;
   error: string | null;
   balance: string | null;
   balances: WalletBalance[];
   isLoadingBalance: boolean;
-  walletType: "freighter" | "walletconnect" | null;
-  connect: (provider?: "freighter" | "walletconnect") => Promise<string | null>;
+  walletType: WalletProviderType | null;
+  connect: (provider?: WalletProviderType) => Promise<string | null>;
   disconnect: () => void;
   refreshBalance: () => Promise<void>;
   signMessage: (message: string) => Promise<string>;
@@ -46,16 +49,7 @@ interface WalletState {
     xdr: string
   ) => Promise<{ hash: string; success: boolean; error?: string; resultXdr?: string }>;
   isSessionActive: boolean;
-  sessionExpiresIn: number | null; // milliseconds until session expires
-  connect: () => Promise<void>;
-  disconnect: () => void;
-  refreshBalance: () => Promise<void>;
-  signAndBroadcastTransaction: (xdr: string) => Promise<{
-    hash: string;
-    success: boolean;
-    error?: string;
-    resultXdr?: string;
-  }>;
+  sessionExpiresIn: number | null;
   extendSession: () => void;
 }
 
@@ -64,8 +58,8 @@ const WalletContext = createContext<WalletState | undefined>(undefined);
 const STORAGE_KEY = "stellarmarket_wallet_connected";
 const WALLET_TYPE_KEY = "stellarmarket_wallet_type";
 const SESSION_KEY = "stellarmarket_wallet_session";
-const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-const SESSION_WARNING_MS = 5 * 60 * 1000; // Warn 5 minutes before expiry
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+const SESSION_WARNING_MS = 5 * 60 * 1000;
 
 function truncateAddress(address: string): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
@@ -73,33 +67,42 @@ function truncateAddress(address: string): string {
 
 export { truncateAddress };
 
-// Stellar Horizon server for fetching balances
 const HORIZON_URL = "https://horizon-testnet.stellar.org";
 const horizonServer = new Horizon.Server(HORIZON_URL);
+
+const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
+const MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015";
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [address, setAddress] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isFreighterInstalled, setIsFreighterInstalled] = useState<
-    boolean | null
-  >(null);
+  const [isFreighterInstalled, setIsFreighterInstalled] = useState<boolean | null>(null);
+  const [isLobstrInstalled, setIsLobstrInstalled] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const [balances, setBalances] = useState<WalletBalance[]>([]);
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
-  const [walletType, setWalletType] = useState<"freighter" | "walletconnect" | null>(null);
+  const [walletType, setWalletType] = useState<WalletProviderType | null>(null);
   const [showWalletSelect, setShowWalletSelect] = useState(false);
-  const balanceRefreshInterval = useRef<NodeJS.Timeout | null>(null);
-  const walletKitRef = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const pendingConnectResolve = useRef<((address: string | null) => void) | null>(null);
+  const pendingDisconnectResolve = useRef<((confirmed: boolean) => void) | null>(null);
+  const switchingToProvider = useRef<WalletProviderType | null>(null);
+
+  const balanceRefreshInterval = useRef<NodeJS.Timeout | null>(null);
+  const sessionTimeoutId = useRef<NodeJS.Timeout | null>(null);
+  const sessionWarningId = useRef<NodeJS.Timeout | null>(null);
+  const sessionCheckInterval = useRef<NodeJS.Timeout | null>(null);
+
+  const walletKitRef = useRef<any>(null);
 
   const getWalletKit = useCallback(async () => {
     if (walletKitRef.current) return walletKitRef.current;
-    const kitModule: any = await import("@creit.tech/stellar-wallets-kit"); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const kit = new kitModule.StellarWalletsKit({
-      network: kitModule.WalletNetwork.TESTNET,
-      selectedWalletId: kitModule.WALLET_CONNECT_ID ?? "walletconnect",
-      modules: [
+    const kitModule: any = await import("@creit.tech/stellar-wallets-kit");
+    const modules: any[] = [];
+
+    if (kitModule.WalletConnectModule) {
+      modules.push(
         new kitModule.WalletConnectModule({
           url: typeof window !== "undefined" ? window.location.origin : "https://stellarmarket.app",
           projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "stellar-market-dev",
@@ -108,33 +111,24 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           icons: [],
           method: kitModule.WalletConnectAllowedMethods?.SIGN,
         }),
-      ],
+      );
+    }
+
+    if (kitModule.LobstrModule) {
+      modules.push(new kitModule.LobstrModule());
+    }
+
+    const kit = new kitModule.StellarWalletsKit({
+      network: kitModule.WalletNetwork?.TESTNET ?? "testnet",
+      selectedWalletId: kitModule.WALLET_CONNECT_ID ?? "walletconnect",
+      modules,
     });
     walletKitRef.current = kit;
     return kit;
   }, []);
+
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [sessionExpiresIn, setSessionExpiresIn] = useState<number | null>(null);
-
-  const balanceRefreshInterval = useRef<NodeJS.Timeout | null>(null);
-  const sessionTimeoutId = useRef<NodeJS.Timeout | null>(null);
-  const sessionWarningId = useRef<NodeJS.Timeout | null>(null);
-  const sessionCheckInterval = useRef<NodeJS.Timeout | null>(null);
-
-  const checkFreighterInstalled = useCallback(async () => {
-    try {
-      const result = await freighterIsConnected();
-      if (result.error) {
-        setIsFreighterInstalled(false);
-        return false;
-      }
-      setIsFreighterInstalled(result.isConnected);
-      return result.isConnected;
-    } catch {
-      setIsFreighterInstalled(false);
-      return false;
-    }
-  }, []);
 
   // Session management functions
   const getStoredSession = useCallback((): WalletSession | null => {
@@ -156,18 +150,23 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setIsSessionActive(true);
   }, []);
 
+  const clearSession = useCallback(() => {
+    localStorage.removeItem(SESSION_KEY);
+    setIsSessionActive(false);
+    setSessionExpiresIn(null);
+    if (sessionTimeoutId.current) clearTimeout(sessionTimeoutId.current);
+    if (sessionWarningId.current) clearTimeout(sessionWarningId.current);
+    if (sessionCheckInterval.current) clearInterval(sessionCheckInterval.current);
+  }, []);
+
   const updateSessionActivity = useCallback(() => {
     const session = getStoredSession();
     if (session) {
       session.lastActivityAt = Date.now();
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       setSessionExpiresIn(SESSION_TIMEOUT_MS);
-
-      // Clear existing timeouts
       if (sessionTimeoutId.current) clearTimeout(sessionTimeoutId.current);
       if (sessionWarningId.current) clearTimeout(sessionWarningId.current);
-
-      // Set warning timeout (5 minutes before expiry)
       sessionWarningId.current = setTimeout(() => {
         window.dispatchEvent(
           new CustomEvent("stellarmarket:sessionWarning", {
@@ -175,8 +174,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           }),
         );
       }, SESSION_TIMEOUT_MS - SESSION_WARNING_MS);
-
-      // Set expiry timeout
       sessionTimeoutId.current = setTimeout(() => {
         disconnect();
         window.dispatchEvent(new CustomEvent("stellarmarket:sessionExpired"));
@@ -184,27 +181,42 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, [getStoredSession]);
 
-  const clearSession = useCallback(() => {
-    localStorage.removeItem(SESSION_KEY);
-    setIsSessionActive(false);
-    setSessionExpiresIn(null);
-    if (sessionTimeoutId.current) clearTimeout(sessionTimeoutId.current);
-    if (sessionWarningId.current) clearTimeout(sessionWarningId.current);
-    if (sessionCheckInterval.current)
-      clearInterval(sessionCheckInterval.current);
+  const checkFreighterInstalled = useCallback(async () => {
+    try {
+      const result = await freighterIsConnected();
+      if (result.error) {
+        setIsFreighterInstalled(false);
+        return false;
+      }
+      setIsFreighterInstalled(result.isConnected);
+      return result.isConnected;
+    } catch {
+      setIsFreighterInstalled(false);
+      return false;
+    }
   }, []);
 
-  // Fetch wallet balance from Stellar Horizon
+  const checkLobstrInstalled = useCallback(async () => {
+    try {
+      const kit = await getWalletKit();
+      await kit.setWallet("LOBSTR");
+      setIsLobstrInstalled(true);
+      return true;
+    } catch {
+      setIsLobstrInstalled(false);
+      return false;
+    }
+  }, [getWalletKit]);
+
+  // Refresh wallet balance from Stellar Horizon
   const refreshBalance = useCallback(async () => {
     if (!address) {
       setBalance(null);
       setBalances([]);
       return;
     }
-
     setIsLoadingBalance(true);
     try {
-      // Fetch all balances from Horizon
       const account = await horizonServer.loadAccount(address);
       const allBalances: WalletBalance[] = account.balances.map((b) => {
         if (b.asset_type === "native") {
@@ -219,25 +231,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           balance: b.balance,
         };
       });
-
-      // Sort XLM first, then by balance
       allBalances.sort((a, b) => {
         if (a.asset === "XLM") return -1;
         if (b.asset === "XLM") return 1;
         return parseFloat(b.balance) - parseFloat(a.balance);
       });
-
       setBalances(allBalances);
-
-      // Set primary XLM balance (truncated to 2 decimal places)
       const xlmBalance = allBalances.find((b) => b.asset === "XLM");
       if (xlmBalance) {
-        const truncated = parseFloat(xlmBalance.balance).toFixed(2);
-        setBalance(truncated);
+        setBalance(parseFloat(xlmBalance.balance).toFixed(2));
       }
-    } catch (err) {
-      console.error("Failed to fetch wallet balance:", err);
-      // Don't clear existing balance on error - keep showing last known
+    } catch {
+      // Keep last known balance on error
     } finally {
       setIsLoadingBalance(false);
     }
@@ -246,13 +251,33 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const restoreSession = useCallback(async () => {
     const wasConnected = localStorage.getItem(STORAGE_KEY);
     if (wasConnected !== "true") return;
-    const storedWalletType = localStorage.getItem(WALLET_TYPE_KEY);
+
+    const storedWalletType = localStorage.getItem(WALLET_TYPE_KEY) as WalletProviderType | null;
+
     if (storedWalletType === "walletconnect") {
       try {
         const kit = await getWalletKit();
         const result = await kit.getAddress();
         setAddress(result.address);
         setWalletType("walletconnect");
+        saveSession(result.address);
+        updateSessionActivity();
+      } catch {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(WALLET_TYPE_KEY);
+      }
+      return;
+    }
+
+    if (storedWalletType === "lobstr") {
+      try {
+        const kit = await getWalletKit();
+        await kit.setWallet("LOBSTR");
+        const result = await kit.getAddress();
+        setAddress(result.address);
+        setWalletType("lobstr");
+        saveSession(result.address);
+        updateSessionActivity();
       } catch {
         localStorage.removeItem(STORAGE_KEY);
         localStorage.removeItem(WALLET_TYPE_KEY);
@@ -263,7 +288,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     const storedSession = getStoredSession();
     if (!storedSession) return;
 
-    // Check if session has expired
     const sessionAge = Date.now() - storedSession.lastActivityAt;
     if (sessionAge > SESSION_TIMEOUT_MS) {
       clearSession();
@@ -283,43 +307,27 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       }
       setAddress(result.address);
       setWalletType("freighter");
+      saveSession(result.address);
+      updateSessionActivity();
     } catch {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(WALLET_TYPE_KEY);
     }
-  }, [checkFreighterInstalled, getWalletKit]);
-        clearSession();
-        return;
-      }
-      setAddress(result.address);
-      setIsSessionActive(true);
-      updateSessionActivity();
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-      clearSession();
-    }
-  }, [
-    checkFreighterInstalled,
-    getStoredSession,
-    clearSession,
-    updateSessionActivity,
-  ]);
+  }, [checkFreighterInstalled, getWalletKit, getStoredSession, clearSession, saveSession, updateSessionActivity]);
 
   useEffect(() => {
     restoreSession();
   }, [restoreSession]);
 
-  // Fetch balance when address changes and set up periodic refresh
+  // Fetch balance when address changes
   useEffect(() => {
     if (address) {
       refreshBalance();
-      // Refresh balance every 30 seconds
       balanceRefreshInterval.current = setInterval(refreshBalance, 30000);
     } else {
       setBalance(null);
       setBalances([]);
     }
-
     return () => {
       if (balanceRefreshInterval.current) {
         clearInterval(balanceRefreshInterval.current);
@@ -327,20 +335,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     };
   }, [address, refreshBalance]);
 
-  // Listen for Freighter's accountChanged event and auto-update publicKey.
-  // Freighter dispatches a custom DOM event when the user switches accounts.
+  // Listen for Freighter account changes
   useEffect(() => {
     const handleAccountChanged = async () => {
       try {
         const result = await getAddress();
         if (result.error) {
-          // Switched to an account that revoked access — treat as disconnect.
           setAddress(null);
           setError(null);
           setBalance(null);
           setBalances([]);
           localStorage.removeItem(STORAGE_KEY);
-          localStorage.removeItem(WALLET_TYPE_KEY);
           localStorage.removeItem(WALLET_TYPE_KEY);
           clearSession();
         } else {
@@ -348,41 +353,31 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           updateSessionActivity();
         }
       } catch {
-        // Ignore transient errors during account switching.
+        // Ignore transient errors
       }
     };
-
     window.addEventListener("freighter#accountChanged", handleAccountChanged);
     return () => {
-      window.removeEventListener(
-        "freighter#accountChanged",
-        handleAccountChanged,
-      );
+      window.removeEventListener("freighter#accountChanged", handleAccountChanged);
     };
   }, [clearSession, updateSessionActivity]);
 
-  // Listen for wallet disconnect events (wallet locked, extension removed, etc.)
+  // Listen for wallet disconnect events
   useEffect(() => {
     const handleDisconnect = async () => {
-      // Verify if wallet is actually disconnected
+      if (walletType !== "freighter") return;
       try {
         const result = await freighterIsConnected();
         if (result.error || !result.isConnected) {
-          // Wallet is disconnected - clear state
           setAddress(null);
           setError(null);
           setBalance(null);
           setBalances([]);
           localStorage.removeItem(STORAGE_KEY);
           clearSession();
-
-          // Dispatch custom event for other components to react
-          window.dispatchEvent(
-            new CustomEvent("stellarmarket:walletDisconnected"),
-          );
+          window.dispatchEvent(new CustomEvent("stellarmarket:walletDisconnected"));
         }
       } catch {
-        // Error checking connection - assume disconnected
         setAddress(null);
         setError(null);
         setBalance(null);
@@ -391,19 +386,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         localStorage.removeItem(WALLET_TYPE_KEY);
         window.dispatchEvent(new CustomEvent("stellarmarket:walletDisconnected"));
         clearSession();
-        window.dispatchEvent(
-          new CustomEvent("stellarmarket:walletDisconnected"),
-        );
       }
     };
 
-    // Listen for Freighter's disconnect event
     window.addEventListener("freighter#disconnected", handleDisconnect);
 
-    // Also listen for visibility change to re-check connection
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible" && address) {
-        // Re-verify connection when tab becomes visible
+      if (document.visibilityState === "visible" && address && walletType === "freighter") {
         handleDisconnect();
       }
     };
@@ -413,15 +402,12 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("freighter#disconnected", handleDisconnect);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [address, clearSession]);
+  }, [address, walletType, clearSession]);
 
   const connectFreighter = useCallback(async () => {
     setError(null);
     setIsConnecting(true);
-
     try {
-      // Detect not-installed: window.freighter is undefined before the SDK
-      // even attempts a connection.
       if (
         typeof window !== "undefined" &&
         !(window as unknown as Record<string, unknown>).freighter
@@ -429,48 +415,38 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         setError("NOT_INSTALLED");
         return null;
       }
-
       const installed = await checkFreighterInstalled();
       if (!installed) {
         setError("NOT_INSTALLED");
         return null;
       }
-
       const accessResult = await requestAccess();
       if (accessResult.error) {
-        const msg =
-          typeof accessResult.error === "string"
-            ? accessResult.error
-            : ((accessResult.error as { message?: string }).message ?? "");
-        // Freighter returns a specific message when the wallet is locked
-        if (
-          msg.toLowerCase().includes("locked") ||
-          msg.toLowerCase().includes("unlock")
-        ) {
+        const msg = typeof accessResult.error === "string"
+          ? accessResult.error
+          : ((accessResult.error as { message?: string }).message ?? "");
+        if (msg.toLowerCase().includes("locked") || msg.toLowerCase().includes("unlock")) {
           setError("LOCKED");
         } else {
           setError(msg || "Failed to connect wallet");
         }
         return null;
       }
-
       const addressResult = await getAddress();
       if (addressResult.error) {
-        const msg =
-          typeof addressResult.error === "string"
-            ? addressResult.error
-            : ((addressResult.error as { message?: string }).message ?? "");
+        const msg = typeof addressResult.error === "string"
+          ? addressResult.error
+          : ((addressResult.error as { message?: string }).message ?? "");
         setError(msg || "Failed to retrieve address");
         return null;
       }
-
       setAddress(addressResult.address);
       setWalletType("freighter");
       localStorage.setItem(STORAGE_KEY, "true");
       localStorage.setItem(WALLET_TYPE_KEY, "freighter");
-      return addressResult.address;
       saveSession(addressResult.address);
       updateSessionActivity();
+      return addressResult.address;
     } catch {
       setError("An unexpected error occurred while connecting the wallet");
       return null;
@@ -482,7 +458,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const connectWalletConnect = useCallback(async () => {
     setError(null);
     setIsConnecting(true);
-
     try {
       const kit = await getWalletKit();
       await kit.openModal({
@@ -494,6 +469,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       setWalletType("walletconnect");
       localStorage.setItem(STORAGE_KEY, "true");
       localStorage.setItem(WALLET_TYPE_KEY, "walletconnect");
+      saveSession(result.address);
+      updateSessionActivity();
       return result.address;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "WalletConnect connection was rejected");
@@ -501,27 +478,101 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsConnecting(false);
     }
-  }, [getWalletKit]);
+  }, [getWalletKit, saveSession, updateSessionActivity]);
 
-  const connect = useCallback(async (provider?: "freighter" | "walletconnect") => {
+  const connectLOBSTR = useCallback(async () => {
+    setError(null);
+    setIsConnecting(true);
+    try {
+      const kit = await getWalletKit();
+      await kit.setWallet("LOBSTR");
+      const result = await kit.getAddress();
+      const lobstrAddress = result.address;
+
+      // Verify testnet connection
+      try {
+        const account = await horizonServer.loadAccount(lobstrAddress);
+        const networkMismatch = account._baseUrl?.includes("horizon.stellar.org");
+        if (networkMismatch) {
+          setError("NETWORK_MISMATCH");
+          return null;
+        }
+      } catch {
+        // Account fetch failure may mean testnet account doesn't exist yet
+      }
+
+      setAddress(lobstrAddress);
+      setWalletType("lobstr");
+      localStorage.setItem(STORAGE_KEY, "true");
+      localStorage.setItem(WALLET_TYPE_KEY, "lobstr");
+      saveSession(lobstrAddress);
+      updateSessionActivity();
+      return lobstrAddress;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("not installed") || msg.includes("not found") || msg.includes("LOBSTR")) {
+        setIsLobstrInstalled(false);
+        setError("NOT_INSTALLED");
+      } else if (msg.includes("network") || msg.includes("Network")) {
+        setError("NETWORK_MISMATCH");
+      } else {
+        setError("Failed to connect LOBSTR wallet");
+      }
+      return null;
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [getWalletKit, saveSession, updateSessionActivity]);
+
+  const handleProviderSwitch = useCallback(async (targetProvider: WalletProviderType) => {
+    if (address && walletType && walletType !== targetProvider) {
+      switchingToProvider.current = targetProvider;
+      setShowDisconnectConfirm(true);
+      return new Promise<string | null>((resolve) => {
+        pendingDisconnectResolve.current = resolve;
+      });
+    }
+    return null;
+  }, [address, walletType]);
+
+  const connect = useCallback(async (provider?: WalletProviderType) => {
     if (!provider) {
+      if (address) {
+        setShowDisconnectConfirm(true);
+        return new Promise<string | null>((resolve) => {
+          pendingDisconnectResolve.current = resolve;
+        });
+      }
       setShowWalletSelect(true);
       return new Promise<string | null>((resolve) => {
         pendingConnectResolve.current = resolve;
       });
     }
 
+    const switchResult = await handleProviderSwitch(provider);
+    if (switchResult !== null) {
+      // User cancelled or handled the switch elsewhere
+      pendingDisconnectResolve.current = null;
+      switchingToProvider.current = null;
+      return switchResult;
+    }
+
     setShowWalletSelect(false);
     let connectedAddress: string | null;
-    if (provider === "walletconnect") {
-      connectedAddress = await connectWalletConnect();
-    } else {
-      connectedAddress = await connectFreighter();
+    switch (provider) {
+      case "walletconnect":
+        connectedAddress = await connectWalletConnect();
+        break;
+      case "lobstr":
+        connectedAddress = await connectLOBSTR();
+        break;
+      default:
+        connectedAddress = await connectFreighter();
     }
     pendingConnectResolve.current?.(connectedAddress);
     pendingConnectResolve.current = null;
     return connectedAddress;
-  }, [connectFreighter, connectWalletConnect]);
+  }, [connectFreighter, connectWalletConnect, connectLOBSTR, handleProviderSwitch, address]);
 
   const disconnect = useCallback(() => {
     setAddress(null);
@@ -531,13 +582,27 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setWalletType(null);
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(WALLET_TYPE_KEY);
-  }, []);
     clearSession();
     window.dispatchEvent(new CustomEvent("stellarmarket:walletDisconnected"));
   }, [clearSession]);
 
+  const handleDisconnectConfirm = useCallback(async (confirmed: boolean) => {
+    setShowDisconnectConfirm(false);
+    if (confirmed) {
+      disconnect();
+    }
+    pendingDisconnectResolve.current?.(confirmed ? null : null);
+    pendingDisconnectResolve.current = null;
+
+    const targetProvider = switchingToProvider.current;
+    switchingToProvider.current = null;
+    if (confirmed && targetProvider) {
+      await connect(targetProvider);
+    }
+  }, [disconnect, connect]);
+
   const signMessage = useCallback(async (message: string) => {
-    if (walletType === "walletconnect") {
+    if (walletType === "walletconnect" || walletType === "lobstr") {
       const kit = await getWalletKit();
       const result = await kit.signMessage(message);
       return result.signedMessage ?? result.signature ?? result;
@@ -547,113 +612,81 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (!("signMessage" in freighter)) {
       throw new Error("This Freighter version does not support message signing.");
     }
-    const result = await (freighter as any).signMessage(message, { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const result = await (freighter as any).signMessage(message, {
       address,
-      networkPassphrase: "Test SDF Network ; September 2015",
+      networkPassphrase: TESTNET_PASSPHRASE,
     });
     if (result.error) {
       throw new Error(typeof result.error === "string" ? result.error : result.error.message);
     }
     return result.signedMessage ?? result.signature;
-  }, [getWalletKit, walletType]);
+  }, [getWalletKit, walletType, address]);
 
-  const signAndBroadcastTransaction = useCallback(
-    async (xdr: string) => {
-      try {
-        const signedResult = walletType === "walletconnect"
-          ? await (await getWalletKit()).signTransaction(xdr, {
-              networkPassphrase: "Test SDF Network ; September 2015",
-              address,
-            })
-          : await signTransaction(xdr, {
-              networkPassphrase: "Test SDF Network ; September 2015",
-            });
-        updateSessionActivity();
+  const signAndBroadcastTransaction = useCallback(async (xdr: string) => {
+    try {
+      let signedResult: any;
 
-        const signedResult = await signTransaction(xdr, {
-          networkPassphrase: "Test SDF Network ; September 2015",
+      if (walletType === "walletconnect" || walletType === "lobstr") {
+        const kit = await getWalletKit();
+        signedResult = await kit.signTransaction(xdr, {
+          networkPassphrase: TESTNET_PASSPHRASE,
+          address,
         });
-
-        if (signedResult.error) {
-          return {
-            success: false,
-            hash: "",
-            error: signedResult.error,
-          };
-        }
-
-        const server = new rpc.Server("https://soroban-testnet.stellar.org");
-        const tx = new Transaction(signedResult.signedTxXdr ?? signedResult.signedTxXdrPayload, "Test SDF Network ; September 2015");
-        
-        const tx = new Transaction(
-          signedResult.signedTxXdr,
-          "Test SDF Network ; September 2015",
-        );
-
-        const sendResponse = await server.sendTransaction(tx);
-
-        if (sendResponse.status !== "PENDING") {
-          return {
-            success: false,
-            hash: sendResponse.hash,
-            error: "Transaction submission failed",
-          };
-        }
-
-        // Poll for confirmation
-        let statusResponse;
-        let attempts = 0;
-        while (attempts <= 10) {
-          statusResponse = await server.getTransaction(sendResponse.hash);
-
-          if (statusResponse.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-            const successResponse =
-              statusResponse as rpc.Api.GetSuccessfulTransactionResponse;
-            return {
-              success: true,
-              hash: sendResponse.hash,
-              resultXdr: successResponse.returnValue?.toXDR("base64"),
-            };
-          }
-
-          if (statusResponse.status === rpc.Api.GetTransactionStatus.FAILED) {
-            return {
-              success: false,
-              hash: sendResponse.hash,
-              error: "Transaction failed on-chain",
-            };
-          }
-
-          // NOT_FOUND = still pending, keep polling
-          attempts++;
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        }
-
-        return {
-          success: false,
-          hash: sendResponse.hash,
-          error: "Transaction timed out or failed to confirm",
-        };
-      } catch (err: unknown) {
-        return {
-          success: false,
-          hash: "",
-          error:
-            err instanceof Error
-              ? err.message
-              : "An error occurred during transaction",
-        };
+      } else {
+        signedResult = await signTransaction(xdr, {
+          networkPassphrase: TESTNET_PASSPHRASE,
+        });
       }
-    },
-    [address, getWalletKit, walletType]
-    [updateSessionActivity],
-  );
+
+      updateSessionActivity();
+
+      if (signedResult.error) {
+        return { success: false, hash: "", error: signedResult.error };
+      }
+
+      const signedTxXdr = signedResult.signedTxXdr ?? signedResult.signedTxXdrPayload;
+      if (!signedTxXdr) {
+        return { success: false, hash: "", error: "No signed transaction returned" };
+      }
+
+      const server = new rpc.Server("https://soroban-testnet.stellar.org");
+      const tx = new Transaction(signedTxXdr, TESTNET_PASSPHRASE);
+      const sendResponse = await server.sendTransaction(tx);
+
+      if (sendResponse.status !== "PENDING") {
+        return { success: false, hash: sendResponse.hash, error: "Transaction submission failed" };
+      }
+
+      let attempts = 0;
+      while (attempts <= 10) {
+        const statusResponse = await server.getTransaction(sendResponse.hash);
+        if (statusResponse.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+          const successResponse = statusResponse as rpc.Api.GetSuccessfulTransactionResponse;
+          return { success: true, hash: sendResponse.hash, resultXdr: successResponse.returnValue?.toXDR("base64") };
+        }
+        if (statusResponse.status === rpc.Api.GetTransactionStatus.FAILED) {
+          return { success: false, hash: sendResponse.hash, error: "Transaction failed on-chain" };
+        }
+        attempts++;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+
+      return { success: false, hash: sendResponse.hash, error: "Transaction timed out" };
+    } catch (err: unknown) {
+      return {
+        success: false,
+        hash: "",
+        error: err instanceof Error ? err.message : "An error occurred during transaction",
+      };
+    }
+  }, [address, getWalletKit, walletType, updateSessionActivity]);
 
   const value = useMemo<WalletState>(
     () => ({
       address,
       isConnecting,
       isFreighterInstalled,
+      isLobstrInstalled,
       error,
       balance,
       balances,
@@ -669,28 +702,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       extendSession: updateSessionActivity,
     }),
     [
-      address,
-      isConnecting,
-      isFreighterInstalled,
-      error,
-      balance,
-      balances,
-      isLoadingBalance,
-      walletType,
-      isSessionActive,
-      sessionExpiresIn,
-      connect,
-      disconnect,
-      refreshBalance,
-      signMessage,
-      signAndBroadcastTransaction,
-      updateSessionActivity,
+      address, isConnecting, isFreighterInstalled, isLobstrInstalled, error,
+      balance, balances, isLoadingBalance, walletType, isSessionActive, sessionExpiresIn,
+      connect, disconnect, refreshBalance, signMessage, signAndBroadcastTransaction, updateSessionActivity,
     ],
   );
 
   return (
     <WalletContext.Provider value={value}>
       {children}
+
+      {/* Wallet selection modal */}
       {showWalletSelect && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm rounded-lg border border-theme-border bg-theme-card p-5 shadow-xl">
@@ -699,24 +721,30 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
               <p className="text-sm text-theme-text">Choose how you want to connect.</p>
             </div>
             <div className="space-y-3">
-              <button
-                type="button"
+              <WalletOptionButton
+                icon={<Wallet size={18} />}
+                label="Freighter"
+                isInstalled={isFreighterInstalled}
+                isConnecting={isConnecting}
                 onClick={() => connect("freighter")}
-                disabled={isConnecting}
-                className="w-full flex items-center justify-between rounded-lg border border-theme-border bg-theme-bg px-4 py-3 text-left text-theme-heading hover:border-stellar-blue disabled:opacity-60"
-              >
-                <span className="flex items-center gap-3"><Wallet size={18} /> Freighter</span>
-                {isConnecting ? <Loader2 size={16} className="animate-spin" /> : null}
-              </button>
-              <button
-                type="button"
+                installUrl="https://freighter.app"
+              />
+              <WalletOptionButton
+                icon={<Smartphone size={18} />}
+                label="LOBSTR"
+                isInstalled={isLobstrInstalled}
+                isConnecting={isConnecting}
+                onClick={() => connect("lobstr")}
+                installUrl="https://lobstr.co"
+              />
+              <WalletOptionButton
+                icon={<QrCode size={18} />}
+                label="WalletConnect"
+                isInstalled={null}
+                isConnecting={isConnecting}
                 onClick={() => connect("walletconnect")}
-                disabled={isConnecting}
-                className="w-full flex items-center justify-between rounded-lg border border-theme-border bg-theme-bg px-4 py-3 text-left text-theme-heading hover:border-stellar-blue disabled:opacity-60"
-              >
-                <span className="flex items-center gap-3"><QrCode size={18} /> WalletConnect</span>
-                {isConnecting ? <Loader2 size={16} className="animate-spin" /> : null}
-              </button>
+                installUrl={null}
+              />
             </div>
             <button
               type="button"
@@ -732,7 +760,154 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       )}
+
+      {/* Disconnect confirmation modal */}
+      {showDisconnectConfirm && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-theme-border bg-theme-card p-5 shadow-xl">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-theme-heading">Disconnect wallet?</h2>
+              <p className="text-sm text-theme-text mt-1">
+                Switching wallets will disconnect your current wallet. Continue?
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => handleDisconnectConfirm(false)}
+                className="flex-1 rounded-lg border border-theme-border px-4 py-2 text-sm text-theme-text hover:text-theme-heading"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDisconnectConfirm(true)}
+                className="flex-1 rounded-lg bg-stellar-blue px-4 py-2 text-sm text-white hover:bg-stellar-blue/90"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Network mismatch error */}
+      {error === "NETWORK_MISMATCH" && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-theme-border bg-theme-card p-5 shadow-xl">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-theme-heading">Network mismatch</h2>
+              <p className="text-sm text-theme-text mt-1">
+                Your wallet is set to Mainnet. Please switch to Testnet in your wallet settings and try again.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="w-full rounded-lg bg-stellar-blue px-4 py-2 text-sm text-white hover:bg-stellar-blue/90"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Install prompt overlay */}
+      {error === "NOT_INSTALLED" && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-theme-border bg-theme-card p-5 shadow-xl">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-theme-heading">Extension not found</h2>
+              <p className="text-sm text-theme-text mt-1">
+                {isFreighterInstalled === false && walletType !== "lobstr"
+                  ? "Freighter extension is not installed. Please install it to continue."
+                  : "LOBSTR extension is not installed. Please install it to continue."}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="flex-1 rounded-lg border border-theme-border px-4 py-2 text-sm text-theme-text hover:text-theme-heading"
+              >
+                Cancel
+              </button>
+              <a
+                href={walletType === "lobstr" ? "https://lobstr.co" : "https://freighter.app"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 rounded-lg bg-stellar-blue px-4 py-2 text-sm text-white hover:bg-stellar-blue/90 text-center"
+              >
+                Install
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Locked wallet error */}
+      {error === "LOCKED" && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-theme-border bg-theme-card p-5 shadow-xl">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-theme-heading">Wallet locked</h2>
+              <p className="text-sm text-theme-text mt-1">
+                Please unlock your Freighter wallet and try again.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="w-full rounded-lg bg-stellar-blue px-4 py-2 text-sm text-white hover:bg-stellar-blue/90"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </WalletContext.Provider>
+  );
+}
+
+function WalletOptionButton({
+  icon,
+  label,
+  isInstalled,
+  isConnecting,
+  onClick,
+  installUrl,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  isInstalled: boolean | null;
+  isConnecting: boolean;
+  onClick: () => void;
+  installUrl: string | null;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isConnecting}
+      className="w-full flex items-center justify-between rounded-lg border border-theme-border bg-theme-bg px-4 py-3 text-left text-theme-heading hover:border-stellar-blue disabled:opacity-60"
+    >
+      <span className="flex items-center gap-3">{icon} {label}</span>
+      <span className="flex items-center gap-2">
+        {isConnecting ? (
+          <Loader2 size={16} className="animate-spin" />
+        ) : isInstalled === false && installUrl ? (
+          <a
+            href={installUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-xs text-stellar-blue hover:underline"
+          >
+            Install
+          </a>
+        ) : null}
+      </span>
+    </button>
   );
 }
 

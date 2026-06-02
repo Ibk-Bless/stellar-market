@@ -117,6 +117,8 @@ pub struct Dispute {
     pub created_at: u64,
     pub voting_deadline: u64,
     pub excluded_voters: Vec<Address>,
+    /// List of arbitrators assigned to this dispute (randomly selected at creation)
+    pub assigned_arbitrators: Vec<Address>,
 }
 
 #[contracttype]
@@ -144,6 +146,8 @@ enum DataKey {
     LastDisputeLedger(Address, Address),
     /// Admin-configurable cooldown duration in ledgers between disputes for the same party pair.
     CooldownDuration,
+    /// Pool of eligible arbitrators that can be randomly selected for disputes
+    ArbitratorPool,
 }
 
 fn require_not_paused(env: &Env) -> Result<(), DisputeError> {
@@ -316,8 +320,6 @@ mod escrow {
     }
 }
 
-/// Detect conflicts of interest by querying job history from escrow contract.
-/// Returns a deduplicated list of addresses that have worked with either disputing party.
 fn detect_conflicts(
     env: &Env,
     escrow_contract: &Address,
@@ -398,6 +400,64 @@ fn detect_conflicts(
     }
 
     conflicts
+}
+
+/// Select random arbitrators from the pool, excluding conflicted parties.
+/// Uses a simple pseudo-random selection based on ledger timestamp and dispute ID.
+fn select_arbitrators(
+    env: &Env,
+    dispute_id: u64,
+    excluded: &Vec<Address>,
+    client: &Address,
+    freelancer: &Address,
+    count: u32,
+) -> Vec<Address> {
+    let pool: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::ArbitratorPool)
+        .unwrap_or(Vec::new(env));
+
+    let mut selected = Vec::<Address>::new(env);
+    
+    if pool.is_empty() {
+        return selected;
+    }
+
+    // Filter out excluded addresses, client, and freelancer
+    let mut eligible = Vec::<Address>::new(env);
+    for addr in pool.iter() {
+        if !excluded.contains(&addr) 
+            && &addr != client 
+            && &addr != freelancer 
+        {
+            eligible.push_back(addr);
+        }
+    }
+
+    if eligible.is_empty() {
+        return selected;
+    }
+
+    // Use ledger timestamp and dispute_id as pseudo-random seed
+    let seed = env.ledger().timestamp().wrapping_add(dispute_id);
+    let pool_size = eligible.len() as u64;
+    
+    // Select up to 'count' unique arbitrators
+    let mut attempts = 0u32;
+    let max_attempts = count.saturating_mul(3); // Prevent infinite loops
+    
+    while selected.len() < count as u32 && attempts < max_attempts && selected.len() < eligible.len() as u32 {
+        let index = ((seed.wrapping_add(attempts as u64).wrapping_mul(2654435761)) % pool_size) as u32;
+        let candidate = eligible.get(index).unwrap();
+        
+        if !selected.contains(&candidate) {
+            selected.push_back(candidate);
+        }
+        attempts += 1;
+    }
+
+    selected
 }
 
 #[contract]
@@ -565,6 +625,7 @@ impl DisputeContract {
     }
 
     /// Raise a dispute on a job. Either the client or freelancer can initiate.
+    /// Automatically selects 5 random arbitrators from the pool to vote on this dispute.
     #[allow(clippy::too_many_arguments)]
     pub fn raise_dispute(
         env: Env,
@@ -631,6 +692,9 @@ impl DisputeContract {
             Vec::<Address>::new(&env)
         };
 
+        // Select 5 random arbitrators for this dispute
+        let assigned_arbitrators = select_arbitrators(&env, count, &excluded_voters, &client, &freelancer, 5);
+
         let dispute = Dispute {
             id: count,
             job_id,
@@ -649,6 +713,7 @@ impl DisputeContract {
             created_at: env.ledger().timestamp(),
             voting_deadline: env.ledger().timestamp().saturating_add(VOTING_PERIOD_SECS),
             excluded_voters,
+            assigned_arbitrators: assigned_arbitrators.clone(),
         };
 
         env.storage()
@@ -679,19 +744,20 @@ impl DisputeContract {
         env.storage().persistent().set(&list_key, &dispute_ids);
         bump_job_disputes_ttl(&env, job_id);
 
-        // Emit event
+        // Emit event with assigned arbitrators
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("raised")),
-            (count, job_id, initiator, client, freelancer),
+            (count, job_id, initiator, client, freelancer, assigned_arbitrators),
         );
 
         Ok(count)
     }
 
-    /// Cast a vote on a dispute. Voters cannot be the client or freelancer.
+    /// Cast a vote on a dispute. Only assigned arbitrators can vote.
     /// If the reputation system is initialized, voters must meet the minimum
     /// reputation threshold. When no reputation contract is configured, voting
     /// proceeds without a reputation check to allow graceful degradation.
+    /// Auto-resolves the dispute when 3 votes are cast for the same decision.
     pub fn cast_vote(
         env: Env,
         dispute_id: u64,
@@ -713,7 +779,12 @@ impl DisputeContract {
             return Err(DisputeError::VotingClosed);
         }
 
-        // Parties involved cannot vote
+        // Check if voter is an assigned arbitrator
+        if !dispute.assigned_arbitrators.contains(&voter) {
+            return Err(DisputeError::Unauthorized);
+        }
+
+        // Parties involved cannot vote (redundant check since they shouldn't be in assigned_arbitrators)
         if voter == dispute.client || voter == dispute.freelancer {
             return Err(DisputeError::ConflictOfInterest);
         }
@@ -801,18 +872,28 @@ impl DisputeContract {
             bump_has_voted_ttl(&env, dispute_id, owner);
         }
 
-        // Emit event
+        // Emit VoteCast event
         env.events().publish(
             (symbol_short!("dispute"), symbol_short!("voted")),
-            (
-                dispute_id,
-                voter,
-                choice,
-                dispute.job_id,
-                dispute.client,
-                dispute.freelancer,
-            ),
+            (dispute_id, voter.clone(), choice.clone(), dispute.job_id, dispute.client.clone(), dispute.freelancer.clone()),
         );
+
+        // Auto-resolve if 3 votes reached for the same decision (majority threshold)
+        let escrow_addr: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract);
+
+        if let Some(escrow) = escrow_addr {
+            if dispute.votes_for_client >= 3 
+                || dispute.votes_for_freelancer >= 3 
+                || dispute.votes_for_refund_split >= 3 
+                || dispute.votes_for_malicious >= 3 
+            {
+                // Auto-resolve the dispute
+                let _ = internal_resolve(&env, dispute_id, &mut dispute, &escrow, false);
+            }
+        }
 
         Ok(())
     }
@@ -1133,6 +1214,87 @@ impl DisputeContract {
             Some(dispute) => dispute.excluded_voters.contains(&voter),
             None => false,
         }
+    }
+
+    /// Add an arbitrator to the pool (admin only).
+    pub fn add_arbitrator(env: Env, admin: Address, arbitrator: Address) -> Result<(), DisputeError> {
+        admin.require_auth();
+        require_not_paused(&env)?;
+        require_admin(&env, &admin)?;
+
+        let mut pool: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ArbitratorPool)
+            .unwrap_or(Vec::new(&env));
+
+        if !pool.contains(&arbitrator) {
+            pool.push_back(arbitrator.clone());
+            env.storage().instance().set(&DataKey::ArbitratorPool, &pool);
+            bump_dispute_count_ttl(&env);
+
+            env.events().publish(
+                (symbol_short!("dispute"), symbol_short!("arb_added")),
+                (admin, arbitrator),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Remove an arbitrator from the pool (admin only).
+    pub fn remove_arbitrator(env: Env, admin: Address, arbitrator: Address) -> Result<(), DisputeError> {
+        admin.require_auth();
+        require_not_paused(&env)?;
+        require_admin(&env, &admin)?;
+
+        let mut pool: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ArbitratorPool)
+            .unwrap_or(Vec::new(&env));
+
+        let mut new_pool = Vec::<Address>::new(&env);
+        let mut removed = false;
+
+        for addr in pool.iter() {
+            if addr != arbitrator {
+                new_pool.push_back(addr);
+            } else {
+                removed = true;
+            }
+        }
+
+        if removed {
+            env.storage().instance().set(&DataKey::ArbitratorPool, &new_pool);
+            bump_dispute_count_ttl(&env);
+
+            env.events().publish(
+                (symbol_short!("dispute"), symbol_short!("arb_rmvd")),
+                (admin, arbitrator),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Get the current arbitrator pool.
+    pub fn get_arbitrator_pool(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ArbitratorPool)
+            .unwrap_or(Vec::new(&env))
+    }
+
+    /// Get the assigned arbitrators for a specific dispute.
+    pub fn get_assigned_arbitrators(env: Env, dispute_id: u64) -> Result<Vec<Address>, DisputeError> {
+        let dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .ok_or(DisputeError::DisputeNotFound)?;
+        bump_dispute_ttl(&env, dispute_id);
+        Ok(dispute.assigned_arbitrators)
     }
 }
 

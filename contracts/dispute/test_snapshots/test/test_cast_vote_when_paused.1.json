@@ -137,6 +137,14 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "assigned_arbitrators"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "client"
                       },
                       "val": {
@@ -1004,6 +1012,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
+                {
+                  "vec": []
                 }
               ]
             }

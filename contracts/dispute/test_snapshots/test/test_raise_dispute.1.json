@@ -90,6 +90,14 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "assigned_arbitrators"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "client"
                       },
                       "val": {
@@ -559,6 +567,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "vec": []
                 }
               ]
             }
@@ -633,6 +644,14 @@
             ],
             "data": {
               "map": [
+                {
+                  "key": {
+                    "symbol": "assigned_arbitrators"
+                  },
+                  "val": {
+                    "vec": []
+                  }
+                },
                 {
                   "key": {
                     "symbol": "client"

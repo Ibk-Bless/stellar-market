@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { X, SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { JobFilters } from "@/hooks/useJobFilters";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
-import { JOB_CATEGORIES, JOB_SKILLS } from "@/constants/jobs";
+import { JOB_SKILLS } from "@/constants/jobs";
+import axios from "axios";
 
 const STATUSES = [
   { value: "OPEN", label: "Open" },
@@ -71,8 +72,29 @@ export default function FilterSidebar({
   onClose,
 }: FilterSidebarProps) {
   const drawerRef = useRef<HTMLDivElement>(null);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(true);
 
   useFocusTrap(drawerRef, { open: isOpen, onClose });
+
+  // Fetch categories from API
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+        const response = await axios.get<string[]>(`${API_URL}/categories`);
+        setCategories(response.data);
+      } catch (error) {
+        console.error("Failed to fetch categories:", error);
+        // Fallback to hardcoded categories if API fails
+        setCategories(["Frontend", "Backend", "Smart Contract", "Design", "Mobile", "Documentation", "DevOps"]);
+      } finally {
+        setLoadingCategories(false);
+      }
+    };
+
+    fetchCategories();
+  }, []);
 
   const content = (
     <div>
@@ -121,14 +143,18 @@ export default function FilterSidebar({
           value={filters.category}
           onChange={(e) => updateFilter("category", e.target.value)}
           className="input-field text-sm"
+          disabled={loadingCategories}
         >
           <option value="All">All Categories</option>
-          {JOB_CATEGORIES.map((category) => (
+          {categories.map((category) => (
             <option key={category} value={category}>
               {category}
             </option>
           ))}
         </select>
+        {loadingCategories && (
+          <p className="text-xs text-theme-text mt-1">Loading categories...</p>
+        )}
       </FilterSection>
 
       {/* Skills */}

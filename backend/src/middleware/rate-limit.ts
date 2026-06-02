@@ -1,8 +1,10 @@
 import { Request, Response } from "express";
 import rateLimit from "express-rate-limit";
+import RedisStore from "rate-limit-redis";
+import { getRedisClient } from "../config/redis";
 
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const WRITE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const WRITE_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 type RateLimitedRequest = Request & { userId?: string; rateLimit?: { resetTime?: Date } };
 
@@ -26,29 +28,45 @@ const sendTooManyWrites = (req: RateLimitedRequest, res: Response): void => {
   res.status(429).json({ error: "Too many write requests" });
 };
 
+// Redis store configuration
+const redisClient = getRedisClient();
+const redisStore = redisClient
+  ? new RedisStore({
+      client: redisClient,
+      prefix: "rate_limit:",
+    })
+  : undefined;
+
 export const globalRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
-  max: 200,
+  max: 100, // 100 req/min per IP
   standardHeaders: true,
   legacyHeaders: false,
+  store: redisStore,
   passOnStoreError: true,
   handler: sendTooManyRequests,
+  skip: (req: Request) => {
+    // Whitelist health-check paths
+    return req.path === "/health" || req.path === "/health/db";
+  },
 });
 
 export const loginRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
-  max: 10,
+  max: 10, // 10 req/min for auth endpoints
   standardHeaders: true,
   legacyHeaders: false,
+  store: redisStore,
   passOnStoreError: true,
   handler: sendTooManyRequests,
 });
 
 export const registerRateLimiter = rateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
-  max: 10,
+  max: 10, // 10 req/min for auth endpoints
   standardHeaders: true,
   legacyHeaders: false,
+  store: redisStore,
   passOnStoreError: true,
   handler: sendTooManyRequests,
 });
@@ -58,6 +76,7 @@ export const forgotPasswordRateLimiter = rateLimit({
   max: 3,
   standardHeaders: true,
   legacyHeaders: false,
+  store: redisStore,
   passOnStoreError: true,
   handler: sendTooManyRequests,
 });
@@ -67,11 +86,12 @@ export const writeRateLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  store: redisStore,
   passOnStoreError: true,
-  keyGenerator: (req) => {
+  keyGenerator: (req: Request) => {
     const rateLimitedReq = req as RateLimitedRequest;
     return rateLimitedReq.userId || req.ip || "unknown";
   },
-  skip: (req) => req.method !== "POST",
+  skip: (req: Request) => req.method !== "POST",
   handler: sendTooManyWrites,
 });

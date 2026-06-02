@@ -37,8 +37,8 @@ export function parseFiltersFromParams(searchParams: URLSearchParams): JobFilter
     category: searchParams.get("category") || "All",
     skills: skills ? skills.split(",") : [],
     status: status ? status.split(",") : [],
-    minBudget: searchParams.get("min") || "",
-    maxBudget: searchParams.get("max") || "",
+    minBudget: searchParams.get("minBudget") || "",
+    maxBudget: searchParams.get("maxBudget") || "",
     postedDate: searchParams.get("posted") || "all",
     sort: searchParams.get("sort") || "newest",
     page: isNaN(page) ? 1 : page,
@@ -51,8 +51,8 @@ export function filtersToParams(filters: JobFilters): URLSearchParams {
   if (filters.category !== "All") params.set("category", filters.category);
   if (filters.skills.length) params.set("skills", filters.skills.join(","));
   if (filters.status.length) params.set("status", filters.status.join(","));
-  if (filters.minBudget) params.set("min", filters.minBudget);
-  if (filters.maxBudget) params.set("max", filters.maxBudget);
+  if (filters.minBudget) params.set("minBudget", filters.minBudget);
+  if (filters.maxBudget) params.set("maxBudget", filters.maxBudget);
   if (filters.postedDate !== "all") params.set("posted", filters.postedDate);
   if (filters.sort !== "newest") params.set("sort", filters.sort);
   if (filters.page > 1) params.set("page", String(filters.page));

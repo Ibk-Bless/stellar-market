@@ -6,6 +6,7 @@ import { ArrowRight, ShieldCheck } from "lucide-react";
 import axios from "axios";
 import EmptyState from "@/components/EmptyState";
 import DisputeCardSkeleton from "@/components/skeletons/DisputeCardSkeleton";
+import { useDelay } from "@/hooks/useDelay";
 import { Dispute } from "@/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
@@ -14,6 +15,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
 export default function DisputesPage() {
   const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [loading, setLoading] = useState(true);
+  const ready = useDelay();
 
   useEffect(() => {
     const fetchDisputes = async () => {
@@ -31,25 +33,28 @@ export default function DisputesPage() {
   }, []);
 
   if (loading) {
-    return (
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="flex flex-col md:flex-row md:items-end justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold text-theme-heading mb-2 flex items-center gap-2">
-              Community Arbitration
-            </h1>
-            <p className="text-theme-text max-w-2xl">
-              Review active disputes and cast your vote as an impartial community member.
-            </p>
+    if (ready) {
+      return (
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+          <div className="flex flex-col md:flex-row md:items-end justify-between mb-8">
+            <div>
+              <h1 className="text-3xl font-bold text-theme-heading mb-2 flex items-center gap-2">
+                Community Arbitration
+              </h1>
+              <p className="text-theme-text max-w-2xl">
+                Review active disputes and cast your vote as an impartial community member.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <DisputeCardSkeleton key={i} />
+            ))}
           </div>
         </div>
-        <div className="grid gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <DisputeCardSkeleton key={i} />
-          ))}
-        </div>
-      </div>
-    );
+      );
+    }
+    return null;
   }
 
   return (

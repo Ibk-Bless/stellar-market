@@ -21,6 +21,14 @@ import {
   ChevronDown,
   Loader2,
   Gift,
+  Monitor,
+  Server,
+  FileCode,
+  Palette,
+  Smartphone,
+  FileText,
+  Container,
+  Grid3X3,
 } from "lucide-react";
 import axios from "axios";
 import { useState, useRef, useEffect, type TouchEvent } from "react";
@@ -214,7 +222,7 @@ function UserMenu({ className }: { className?: string }) {
 
 /** Wallet balance display with dropdown for other assets */
 function WalletBalanceDisplay() {
-  const { address, balance, balances, isLoadingBalance } = useWallet();
+  const { address, balance, balances, isLoadingBalance, connect } = useWallet();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -228,20 +236,30 @@ function WalletBalanceDisplay() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  if (!address || !balance) return null;
+  if (!address) {
+    return (
+      <button
+        onClick={() => connect()}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-stellar-blue/50 text-stellar-blue hover:bg-stellar-blue/10 transition-colors text-sm font-medium"
+      >
+        <Wallet size={14} />
+        Connect Wallet
+      </button>
+    );
+  }
 
   return (
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setDropdownOpen(!dropdownOpen)}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-theme-border hover:bg-theme-border/50 transition-colors text-sm"
-        title={`Full balance: ${balance} XLM`}
+        title={`Full balance: ${balance ?? "0.00"} XLM`}
       >
         {isLoadingBalance ? (
           <Loader2 size={14} className="animate-spin" />
         ) : (
           <>
-            <span className="font-medium text-theme-heading">{balance}</span>
+            <span className="font-medium text-theme-heading">{balance ?? "0.00"}</span>
             <span className="text-theme-text">XLM</span>
             {balances.length > 1 && <ChevronDown size={14} className="text-theme-text" />}
           </>
@@ -326,6 +344,29 @@ export default function Navbar() {
   const pathname = usePathname();
   const isClient = user?.role === "CLIENT";
   const isFreelancer = user?.role === "FREELANCER";
+
+  const categories = [
+    { slug: "frontend", label: "Frontend" },
+    { slug: "backend", label: "Backend" },
+    { slug: "smart-contract", label: "Smart Contract" },
+    { slug: "design", label: "Design" },
+    { slug: "mobile", label: "Mobile" },
+    { slug: "documentation", label: "Documentation" },
+    { slug: "devops", label: "DevOps" },
+  ];
+
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const categoriesRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (categoriesRef.current && !categoriesRef.current.contains(e.target as Node)) {
+        setCategoriesOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const navLinks = [
     { href: "/jobs", label: isFreelancer ? "Find Work" : "Jobs", icon: Briefcase, hide: isClient },
@@ -449,6 +490,41 @@ export default function Navbar() {
                 {link.href === "/messages" && <UnreadBadge />}
               </Link>
             ))}
+
+            {/* Categories Dropdown */}
+            <div className="relative" ref={categoriesRef}>
+              <button
+                onClick={() => setCategoriesOpen(!categoriesOpen)}
+                className={`transition-colors flex items-center gap-2 text-sm font-medium ${
+                  pathname?.startsWith("/category")
+                    ? "text-stellar-blue"
+                    : "text-theme-text hover:text-theme-heading"
+                }`}
+              >
+                <Grid3X3 size={16} />
+                Categories
+                <ChevronDown size={12} />
+              </button>
+              {categoriesOpen && (
+                <div className="absolute left-0 mt-2 w-52 bg-theme-card border border-theme-border rounded-xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-top-2">
+                  {categories.map((cat) => (
+                    <Link
+                      key={cat.slug}
+                      href={`/category/${cat.slug}`}
+                      onClick={() => setCategoriesOpen(false)}
+                      className={`flex items-center gap-2 px-4 py-2.5 text-sm transition-colors ${
+                        pathname === `/category/${cat.slug}`
+                          ? "text-stellar-blue bg-stellar-blue/5"
+                          : "text-theme-text hover:bg-theme-border/50"
+                      }`}
+                    >
+                      {cat.label}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <NotificationBell />
             <ThemeToggleButton />
             <WalletBalanceDisplay />
@@ -517,6 +593,26 @@ export default function Navbar() {
                   {link.href === "/messages" && <UnreadBadge />}
                 </Link>
               ))}
+              {/* Mobile Categories */}
+              <div className="mt-2 pt-2 border-t border-theme-border">
+                <p className="px-4 py-2 text-xs font-semibold text-theme-text uppercase tracking-wider">
+                  Categories
+                </p>
+                {categories.map((cat) => (
+                  <Link
+                    key={cat.slug}
+                    href={`/category/${cat.slug}`}
+                    onClick={() => setMobileOpen(false)}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-sm ${
+                      pathname === `/category/${cat.slug}`
+                        ? "bg-stellar-blue/10 text-stellar-blue font-bold"
+                        : "text-theme-text hover:bg-theme-border/30"
+                    }`}
+                  >
+                    {cat.label}
+                  </Link>
+                ))}
+              </div>
             </div>
 
             <div className="mt-auto pt-8 border-t border-theme-border">

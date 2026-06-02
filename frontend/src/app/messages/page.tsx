@@ -7,12 +7,16 @@ import axios from "axios";
 import { Conversation } from "@/types";
 import Image from "next/image";
 import { useAuth } from "@/context/AuthContext";
+import { useDelay } from "@/hooks/useDelay";
+import MessageSkeleton from "@/components/skeletons/MessageSkeleton";
 
 export default function InboxPage() {
   const { token } = useAuth();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+
+  const ready = useDelay();
 
   useEffect(() => {
     const fetchConversations = async () => {
@@ -74,17 +78,11 @@ export default function InboxPage() {
       </div>
 
       <div className="space-y-4">
-        {loading ? (
+        {loading && ready ? (
           Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="card animate-pulse flex items-center gap-4">
-              <div className="w-12 h-12 rounded-full bg-theme-border" />
-              <div className="flex-1 space-y-2">
-                <div className="h-4 bg-theme-border rounded w-1/4" />
-                <div className="h-3 bg-theme-border rounded w-1/2" />
-              </div>
-            </div>
+            <MessageSkeleton key={i} />
           ))
-        ) : filteredConversations.length > 0 ? (
+        ) : loading ? null : filteredConversations.length > 0 ? (
           filteredConversations.map((conv) => (
             <Link key={conv.id} href={`/messages/${conv.id}`}>
               <div className="card hover:border-stellar-blue/30 transition-all group flex items-start gap-4 cursor-pointer relative">

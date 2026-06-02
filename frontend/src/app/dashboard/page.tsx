@@ -34,6 +34,7 @@ import StatusBadge from "@/components/StatusBadge";
 import OnboardingWizard from "@/components/OnboardingWizard";
 import { DashboardStatsSkeleton, DashboardTabContentSkeleton } from "@/components/skeletons/DashboardSkeleton";
 import DisputeCardSkeleton from "@/components/skeletons/DisputeCardSkeleton";
+import { useDelay } from "@/hooks/useDelay";
 import { useAuth } from "@/context/AuthContext";
 import { useSocket } from "@/context/SocketContext";
 import { Job, Application, PaginatedResponse } from "@/types";
@@ -110,6 +111,7 @@ export default function DashboardPage() {
   const [earningsChartData, setEarningsChartData] = useState<Array<{ name: string; amount: number }>>([]);
   const [spendingChartData, setSpendingChartData] = useState<Array<{ name: string; amount: number }>>([]);
   const [dataLoading, setDataLoading] = useState(true);
+  const ready = useDelay();
 
   // Withdraw-application state (freelancer)
   const [withdrawingId, setWithdrawingId] = useState<string | null>(null);
@@ -340,9 +342,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats */}
-      {dataLoading ? (
+      {dataLoading && ready ? (
         <DashboardStatsSkeleton />
-      ) : (
+      ) : dataLoading ? null : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           {displayStats.map((stat) => (
             <div key={stat.label} className="card flex items-center gap-4">
@@ -376,7 +378,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {dataLoading ? (
+      {dataLoading && ready ? (
         activeTab === "Active Disputes" ? (
           <div className="space-y-4">
             {Array.from({ length: 3 }).map((_, i) => (
@@ -386,7 +388,7 @@ export default function DashboardPage() {
         ) : (
           <DashboardTabContentSkeleton />
         )
-      ) : (
+      ) : dataLoading ? null : (
         <>
           {/* ── Freelancer tab content ── */}
           {!isClient && activeTab === "My Applications" && (

@@ -20,6 +20,7 @@ import webhookRoutes from "./webhook.routes";
 import healthRoutes from "./health.routes";
 import referralRoutes from "./referral.routes";
 import reportRoutes from "./report.routes";
+import categoriesRoutes from "./categories.routes";
 
 const router = Router();
 
@@ -30,6 +31,7 @@ router.use("/users", userRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/jobs/recommended", recommendationRoutes);
 router.use("/jobs", jobRoutes);
+router.use("/categories", categoriesRoutes);
 router.use("/", applicationRoutes);
 router.use("/", milestoneRoutes);
 router.use("/messages", messageRoutes);
@@ -44,5 +46,6 @@ router.use("/platform", platformRoutes);
 router.use("/portfolio", portfolioRoutes);
 router.use("/webhooks", webhookRoutes);
 router.use("/reports", reportRoutes);
+router.use("/categories", categoryRoutes);
 
 export default router;
