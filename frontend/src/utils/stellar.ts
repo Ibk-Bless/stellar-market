@@ -75,17 +75,12 @@ export async function submitWithPreRegistration(
   const txHash = tx.hash().toString("hex");
   const server = new rpc.Server(RPC_URL);
 
-  // Extract max_ledger_version from the transaction timebounds
+  // Extract expiry from the transaction timeBounds (maxTime acts as the deadline)
   let maxLedger: number | undefined;
-  try {
-    const timeBounds = tx.toEnvelope().tx().timeBounds();
-    if (timeBounds) {
-      const raw = timeBounds.maxTime().toString();
-      const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) maxLedger = parsed;
-    }
-  } catch {
-    // timeBounds may not be present — proceed without maxLedger
+  const maxTime = tx.timeBounds?.maxTime;
+  if (maxTime) {
+    const parsed = parseInt(String(maxTime), 10);
+    if (!isNaN(parsed) && parsed > 0) maxLedger = parsed;
   }
 
   // Pre-register before broadcasting — adds < 50 ms (single DB upsert)

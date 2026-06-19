@@ -7,6 +7,7 @@ jest.mock("@prisma/client", () => {
   const mockPrisma = {
     transaction: {
       create: jest.fn(),
+      upsert: jest.fn(),
       findUnique: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
@@ -63,14 +64,14 @@ describe("Transaction Routes", () => {
         tokenAddress: "GTOKEN",
         txHash: "hash123",
         type: "DEPOSIT",
+        status: "SUCCESS",
         createdAt: new Date(),
         job: mockJob,
         milestone: null,
       };
 
       mockPrisma.job.findUnique.mockResolvedValue(mockJob);
-      mockPrisma.transaction.findUnique.mockResolvedValue(null);
-      mockPrisma.transaction.create.mockResolvedValue(mockTransaction);
+      mockPrisma.transaction.upsert.mockResolvedValue(mockTransaction);
 
       const response = await request(app).post("/api/transactions").send({
         jobId: "job123",
@@ -104,12 +105,27 @@ describe("Transaction Routes", () => {
       expect(response.body).toHaveProperty("error", "Job not found");
     });
 
-    it("should return 409 if transaction already exists", async () => {
-      const mockJob = { id: "job123" };
-      const existingTx = { id: "tx123", txHash: "hash123" };
+    it("should return 201 and promote a PENDING pre-registration to SUCCESS on duplicate txHash", async () => {
+      const mockJob = { id: "job123", title: "Test Job" };
+      const promotedTx = {
+        id: "tx123",
+        jobId: "job123",
+        milestoneId: null,
+        fromAddress: "GTEST123",
+        toAddress: "GTEST456",
+        amount: 100,
+        tokenAddress: "GTOKEN",
+        txHash: "hash123",
+        type: "DEPOSIT",
+        status: "SUCCESS",
+        createdAt: new Date(),
+        job: mockJob,
+        milestone: null,
+      };
 
       mockPrisma.job.findUnique.mockResolvedValue(mockJob);
-      mockPrisma.transaction.findUnique.mockResolvedValue(existingTx);
+      // Upsert returns the promoted record regardless of whether it was pre-existing
+      mockPrisma.transaction.upsert.mockResolvedValue(promotedTx);
 
       const response = await request(app).post("/api/transactions").send({
         jobId: "job123",
@@ -121,11 +137,9 @@ describe("Transaction Routes", () => {
         type: "DEPOSIT",
       });
 
-      expect(response.status).toBe(409);
-      expect(response.body).toHaveProperty(
-        "error",
-        "Transaction already recorded",
-      );
+      expect(response.status).toBe(201);
+      expect(response.body).toHaveProperty("status", "SUCCESS");
+      expect(response.body).toHaveProperty("txHash", "hash123");
     });
   });
 
