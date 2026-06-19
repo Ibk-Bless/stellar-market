@@ -1,4 +1,4 @@
-import { PrismaClient, NotificationType } from "@prisma/client";
+import { Notification, PrismaClient, NotificationType } from "@prisma/client";
 import { getIo } from "../socket";
 import { EmailService } from "./email.service";
 import { config } from "../config";
@@ -106,19 +106,32 @@ export class NotificationService {
       });
     });
 
+    return this.deliverPersistedNotification(notification);
+  }
+
+  /**
+   * Delivers a notification that was already committed by another transaction.
+   */
+  static deliverPersistedNotification(notification: Notification) {
     void this.maybeSendEmailForNotification({
-      userId,
-      type,
-      title,
-      message,
-      metadata: metadata || {},
+      userId: notification.userId,
+      type: notification.type,
+      title: notification.title,
+      message: notification.message,
+      metadata: notification.metadata || {},
     });
 
-    // 2. Emit real-time event via Socket.IO
     const io = getIo();
-    io.to(`user:${userId}`).emit("notification:new", notification);
+    io.to(`user:${notification.userId}`).emit("notification:new", notification);
 
-    logger.info({ userId, type, title }, "Notification sent");
+    logger.info(
+      {
+        userId: notification.userId,
+        type: notification.type,
+        title: notification.title,
+      },
+      "Notification sent",
+    );
     return notification;
   }
 

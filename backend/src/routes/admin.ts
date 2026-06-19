@@ -14,6 +14,11 @@ import { z, ZodError } from "zod";
 import { logAdminAction } from "../utils/auditLogger";
 import { NotificationService } from "../services/notification.service";
 import { validate } from "../middleware/validation";
+import {
+  getHorizonStatus,
+  overrideHorizonCursor,
+  replayHorizonDlq,
+} from "../services/horizon-listener.service";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -1021,6 +1026,61 @@ router.post(
 );
 
 const REPORT_STATUSES = ["PENDING", "REVIEWED", "DISMISSED"] as const;
+
+/**
+ * GET /api/admin/horizon/status
+ * Return the durable listener cursor and unresolved DLQ depth.
+ */
+router.get(
+  "/horizon/status",
+  async (_req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      res.json(await getHorizonStatus());
+    } catch (error) {
+      console.error("Error fetching Horizon listener status:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+/**
+ * POST /api/admin/horizon/dlq/replay
+ * Replay unresolved failed events in cursor order.
+ */
+router.post(
+  "/horizon/dlq/replay",
+  async (_req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      res.json(await replayHorizonDlq());
+    } catch (error) {
+      console.error("Error replaying Horizon DLQ:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+/**
+ * POST /api/admin/horizon/cursor
+ * Manually replace the persisted paging token for disaster recovery.
+ */
+router.post(
+  "/horizon/cursor",
+  validate({
+    body: z.object({
+      cursor: z.string().trim().min(1, "Cursor is required"),
+    }),
+  }),
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const { cursor } = req.body as { cursor: string };
+      await overrideHorizonCursor(cursor);
+      res.json({ cursor });
+    } catch (error) {
+      console.error("Error overriding Horizon cursor:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 /**
  * GET /api/admin/reports

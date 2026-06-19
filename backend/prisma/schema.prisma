@@ -484,6 +484,28 @@ model SyncState {
   updatedAt         DateTime @updatedAt
 }
 
+model HorizonCursor {
+  id          Int       @id @default(1)
+  cursor      String
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+  lastEventAt DateTime? @map("last_event_at")
+
+  @@map("horizon_cursor")
+}
+
+model HorizonDlq {
+  id         Int       @id @default(autoincrement())
+  cursor     String
+  payload    Json
+  error      String
+  attempt    Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  replayedAt DateTime? @map("replayed_at")
+
+  @@index([replayedAt, cursor])
+  @@map("horizon_dlq")
+}
+
 model Badge {
   id            String    @id @default(cuid())
   userId        String
