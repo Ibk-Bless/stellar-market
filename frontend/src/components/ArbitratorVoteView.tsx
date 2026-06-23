@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, Loader2, Scale } from "lucide-react";
+import { ExternalLink, Loader2, Scale, Shield } from "lucide-react";
 import type { Dispute } from "@/types";
 
 interface ArbitratorVoteViewProps {
@@ -108,14 +108,28 @@ export default function ArbitratorVoteView({
                 key={item.id}
                 className="flex items-center justify-between bg-theme-card border border-theme-border rounded-lg px-3 py-2"
               >
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm text-theme-heading truncate max-w-[200px]">
                     {item.fileName}
                   </p>
                   <p className="text-[10px] text-theme-text-muted">{item.fileType}</p>
+                  {item.sha256 && (
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <Shield size={9} className="text-theme-success flex-shrink-0" />
+                      <span className="font-mono text-[9px] text-theme-success">
+                        {item.sha256.slice(0, 12)}…
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <a
-                  href={`https://ipfs.io/ipfs/${item.ipfsHash}`}
+                  href={
+                    item.url
+                      ? `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace("/api", "")}${item.url}`
+                      : item.ipfsHash
+                        ? `https://ipfs.io/ipfs/${item.ipfsHash}`
+                        : "#"
+                  }
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 text-xs text-stellar-blue hover:underline flex-shrink-0 ml-3"

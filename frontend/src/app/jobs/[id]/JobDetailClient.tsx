@@ -28,6 +28,7 @@ import ReviewModal from "@/components/ReviewModal";
 import MilestoneTimeline from "@/components/MilestoneTimeline";
 import MilestoneProgressTracker from "@/components/MilestoneProgressTracker";
 import TransactionConfirmationModal from "@/components/TransactionConfirmationModal";
+import DepositRateInfo from "@/components/DepositRateInfo";
 import ProposeRevisionModal, {
   type ProposeRevisionMilestoneInput,
 } from "@/components/ProposeRevisionModal";
@@ -67,6 +68,11 @@ type PendingOnChainAction = {
   milestoneId?: string;
   newDeadline?: string;
   onChainJobId?: number | string;
+  /** Exchange-rate parity context for the FUND_JOB confirmation. */
+  rateInfo?: {
+    agreedValueStroops: string;
+    maxSlippageBps: number;
+  };
 };
 
 export default function JobDetailClient() {
@@ -427,9 +433,29 @@ export default function JobDetailClient() {
           action === "extend-deadline" && milestoneId
             ? extendDeadlineDate[milestoneId]
             : undefined,
+        rateInfo:
+          action === "fund" && res.data.agreedValueStroops
+            ? {
+                agreedValueStroops: String(res.data.agreedValueStroops),
+                maxSlippageBps: Number(res.data.maxSlippageBps ?? 0),
+              }
+            : undefined,
       });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Action failed.");
+      // Surface the contract's exchange-rate parity failures with their detail.
+      if (axios.isAxiosError(err) && err.response?.data?.error === "InsufficientValue") {
+        setError(
+          err.response.data.message ??
+            "The deposit is worth less than the agreed job value at the current exchange rate.",
+        );
+      } else if (axios.isAxiosError(err) && err.response?.data?.error === "OracleUnavailable") {
+        setError(
+          err.response.data.message ??
+            "The exchange-rate oracle is currently unavailable. Try again shortly.",
+        );
+      } else {
+        setError(err instanceof Error ? err.message : "Action failed.");
+      }
     }
   };
 
@@ -716,6 +742,14 @@ export default function JobDetailClient() {
         onConfirm={async (preparedXdr) => {
           await confirmPendingOnChainAction(preparedXdr);
         }}
+        extraContent={
+          pendingOnChainAction?.rateInfo ? (
+            <DepositRateInfo
+              agreedValueStroops={pendingOnChainAction.rateInfo.agreedValueStroops}
+              maxSlippageBps={pendingOnChainAction.rateInfo.maxSlippageBps}
+            />
+          ) : undefined
+        }
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

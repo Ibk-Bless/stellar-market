@@ -9,6 +9,8 @@ import { useWallet } from "@/context/WalletContext";
 import { useAuth } from "@/context/AuthContext";
 import { Dispute, Vote } from "@/types";
 import DisputeVoteProgress from "@/components/DisputeVoteProgress";
+import EvidenceViewer from "@/components/EvidenceViewer";
+import EvidenceUpload from "@/components/EvidenceUpload";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
 
@@ -226,6 +228,19 @@ export default function DisputeDetailPage() {
               </p>
             </div>
             
+            <EvidenceViewer disputeId={dispute.id} />
+
+            {isParticipant &&
+              dispute.status !== "RESOLVED_CLIENT" &&
+              dispute.status !== "RESOLVED_FREELANCER" && (
+                <div className="card">
+                  <EvidenceUpload
+                    disputeId={dispute.id}
+                    onUploadComplete={fetchDispute}
+                  />
+                </div>
+              )}
+
             <h2 className="text-xl font-bold text-theme-heading mb-4 border-b border-theme-border pb-2">
               Community Votes
             </h2>

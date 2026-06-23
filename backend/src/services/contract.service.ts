@@ -41,6 +41,22 @@ export type RevisionProposalView = {
   createdAt: number;
 };
 
+/** View of the on-chain exchange-rate parity snapshot recorded at funding time. */
+export type RateSnapshotView = {
+  /** TWAP of the funding token in XLM stroops, scaled by 1e7. */
+  twapPriceStroops: string;
+  /** Number of ledger samples the TWAP averaged over. */
+  samples: number;
+  /** Agreed job value in XLM stroops. */
+  agreedValueStroops: string;
+  /** Computed value of the deposit in XLM stroops at funding time. */
+  depositedValueStroops: string;
+  /** Tolerated downside deviation in basis points. */
+  maxSlippageBps: number;
+  /** Ledger sequence at which the snapshot was taken. */
+  ledger: number;
+};
+
 export class ContractSimulationError extends Error {
   constructor(public readonly simulationError: string) {
     super(`Contract simulation failed: ${simulationError}`);
@@ -127,8 +143,19 @@ export class ContractService {
 
   /**
    * Builds an un-signed transaction XDR for funding a job.
+   *
+   * `agreedValueStroops` is the off-chain-agreed job value expressed in XLM
+   * stroops; the contract validates the deposit against a DEX TWAP and rejects
+   * under-value funding. Pass `0n` to bypass the oracle check (native-XLM jobs
+   * and the legacy migration path). `maxSlippageBps` is the tolerated downside
+   * deviation in basis points (e.g. 200 = 2%).
    */
-  static async buildFundJobTx(clientPublicKey: string, jobId: string) {
+  static async buildFundJobTx(
+    clientPublicKey: string,
+    jobId: string,
+    agreedValueStroops: bigint = 0n,
+    maxSlippageBps: number = 0,
+  ) {
     const server = getRpcServer();
     const contract = new Contract(contractId);
     const account = await server.getAccount(clientPublicKey);
@@ -141,13 +168,83 @@ export class ContractService {
       contract.call(
         "fund_job",
         nativeToScVal(BigInt(jobId)),
-        new Address(clientPublicKey).toScVal()
+        new Address(clientPublicKey).toScVal(),
+        nativeToScVal(agreedValueStroops, { type: "i128" }),
+        nativeToScVal(maxSlippageBps, { type: "u32" }),
       )
     )
     .setTimeout(0)
     .build();
 
     return tx.toXDR();
+  }
+
+  /**
+   * Reads the stored exchange-rate parity snapshot for a job, or `null` if the
+   * job was funded without oracle validation (legacy / XLM-only).
+   */
+  static async getRateSnapshot(onChainJobId: string): Promise<RateSnapshotView | null> {
+    const contract = new Contract(contractId);
+    const native = await this.simulateContractRead(
+      contract.call("get_rate_snapshot", nativeToScVal(BigInt(onChainJobId))),
+    );
+    if (native === null || native === undefined) {
+      return null;
+    }
+    const snap = native as {
+      twap_price: bigint | number;
+      samples: number;
+      agreed_value_stroops: bigint | number;
+      deposited_value: bigint | number;
+      max_slippage_bps: number;
+      ledger: number;
+    };
+    return {
+      twapPriceStroops: snap.twap_price.toString(),
+      samples: Number(snap.samples),
+      agreedValueStroops: snap.agreed_value_stroops.toString(),
+      depositedValueStroops: snap.deposited_value.toString(),
+      maxSlippageBps: Number(snap.max_slippage_bps),
+      ledger: Number(snap.ledger),
+    };
+  }
+
+  /**
+   * Simulate `fund_job` so an exchange-rate parity failure can be surfaced as a
+   * structured API error *before* the client signs. Returns `{ ok: true }` when
+   * the deposit would pass, or a typed reason when it would be rejected.
+   *
+   * Network/simulation issues unrelated to parity are reported as `UNKNOWN` so
+   * callers can fall back to building the XDR rather than blocking funding.
+   */
+  static async simulateFundJob(
+    clientPublicKey: string,
+    onChainJobId: string,
+    agreedValueStroops: bigint,
+    maxSlippageBps: number,
+  ): Promise<
+    | { ok: true }
+    | { ok: false; reason: "INSUFFICIENT_VALUE" | "ORACLE_UNAVAILABLE" | "UNKNOWN"; detail?: string }
+  > {
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "fund_job",
+      nativeToScVal(BigInt(onChainJobId)),
+      new Address(clientPublicKey).toScVal(),
+      nativeToScVal(agreedValueStroops, { type: "i128" }),
+      nativeToScVal(maxSlippageBps, { type: "u32" }),
+    );
+
+    try {
+      await this.simulateContractRead(operation);
+      return { ok: true };
+    } catch (err) {
+      const detail = err instanceof ContractSimulationError ? err.simulationError : String(err);
+      // EscrowError discriminants: InsufficientValue = 41, OracleUnavailable = 42.
+      if (/#41\b/.test(detail)) return { ok: false, reason: "INSUFFICIENT_VALUE", detail };
+      if (/#42\b/.test(detail)) return { ok: false, reason: "ORACLE_UNAVAILABLE", detail };
+      return { ok: false, reason: "UNKNOWN", detail };
+    }
   }
 
   /**
@@ -696,5 +793,75 @@ export class ContractService {
         data: { budget: budgetXlm },
       });
     });
+  }
+
+  /**
+   * Fetches current ledger, expiry ledger, and days remaining for an escrow.
+   */
+  static async getEscrowTtl(onChainJobId: string): Promise<{
+    currentLedger: number;
+    expiryLedger: number;
+    daysRemaining: number;
+  } | null> {
+    try {
+      const server = getRpcServer();
+      const keyScVal = xdr.ScVal.scvVec([
+        xdr.ScVal.scvSymbol("Job"),
+        xdr.ScVal.scvU64(new xdr.Uint64(BigInt(onChainJobId)))
+      ]);
+      
+      const ledgerKey = xdr.LedgerKey.contractData(
+        new xdr.LedgerKeyContractData({
+          contract: Address.fromString(contractId).toScAddress(),
+          key: keyScVal,
+          durability: xdr.ContractDataDurability.persistent(),
+        })
+      );
+
+      const response = await server.getLedgerEntries(ledgerKey);
+      if (!response.entries || response.entries.length === 0) {
+        return null;
+      }
+      
+      const entry = response.entries[0];
+      const currentLedger = response.latestLedger;
+      const expiryLedger = entry.liveUntilLedgerSeq ?? 0;
+      
+      const ledgersRemaining = Math.max(0, expiryLedger - currentLedger);
+      const daysRemaining = (ledgersRemaining * 5) / (24 * 60 * 60);
+      
+      return {
+        currentLedger,
+        expiryLedger,
+        daysRemaining: Number(daysRemaining.toFixed(2)),
+      };
+    } catch (error) {
+      logger.error({ err: error, onChainJobId }, "Error fetching escrow TTL");
+      return null;
+    }
+  }
+
+  /**
+   * Builds an unsigned transaction XDR to extend escrow TTL.
+   */
+  static async buildExtendEscrowTtlTx(callerPublicKey: string, onChainJobId: string): Promise<string> {
+    const server = getRpcServer();
+    const contract = new Contract(contractId);
+    const account = await server.getAccount(callerPublicKey);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          "extend_escrow_ttl",
+          nativeToScVal(BigInt(onChainJobId)),
+        ),
+      )
+      .setTimeout(0)
+      .build();
+
+    return tx.toXDR();
   }
 }

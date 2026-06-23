@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, String,
-    Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
+    IntoVal, String, Symbol, Vec,
 };
 
 #[contracterror]
@@ -74,6 +74,13 @@ pub enum EscrowError {
     ProposalExpired = 39,
     /// The proposal TTL has not yet elapsed; it cannot be expired yet.
     ProposalNotExpirable = 40,
+    /// The deposited token amount is worth less than the agreed value, beyond the
+    /// tolerated slippage. The escrow would under-fund the freelancer.
+    InsufficientValue = 41,
+    /// The configured price oracle could not be reached or returned invalid data.
+    OracleUnavailable = 42,
+    /// An arithmetic overflow occurred while computing the deposited value.
+    ValueOverflow = 43,
 }
 
 /// Privileged actions that can be proposed and approved through the multi-sig flow.
@@ -260,6 +267,28 @@ pub struct RevisionProposal {
     pub created_at: u64,
 }
 
+/// A snapshot of the exchange-rate parity check performed at funding time.
+///
+/// `twap_price` is the time-weighted average price of the funding token quoted in
+/// XLM stroops, scaled by [`PRICE_SCALE`]. `deposited_value` is the resulting
+/// value of the deposit in XLM stroops. Stored per job for audit / UI display.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RateSnapshot {
+    /// TWAP of `token` quoted in XLM stroops, scaled by `PRICE_SCALE`.
+    pub twap_price: i128,
+    /// Number of ledger samples the oracle averaged over.
+    pub samples: u32,
+    /// Agreed job value in XLM stroops (0 when oracle validation was bypassed).
+    pub agreed_value_stroops: i128,
+    /// Computed value of the deposit in XLM stroops at funding time.
+    pub deposited_value: i128,
+    /// Tolerated downside deviation in basis points.
+    pub max_slippage_bps: u32,
+    /// Ledger sequence at which the snapshot was taken.
+    pub ledger: u32,
+}
+
 /// A snapshot of milestones at a specific point in time for audit trail purposes.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -289,7 +318,21 @@ enum DataKey {
     RevisionHistory(u64), // Vec<MilestoneRevision> keyed by job_id
     MilestoneSubmittedAt(u64, u32),
     InactivityAutoApproveAt(u64, u32),
+    /// Address of the price oracle contract used for exchange-rate parity checks.
+    PriceOracle,
+    /// Stored RateSnapshot from the parity check performed at funding time.
+    RateSnapshot(u64),
 }
+
+/// Fixed-point scale for oracle prices: prices are quoted in XLM stroops per token
+/// unit, multiplied by this factor (1e7, matching Stellar's 7-decimal precision).
+const PRICE_SCALE: i128 = 10_000_000;
+
+/// Minimum number of ledger samples the TWAP must be averaged over.
+const MIN_TWAP_SAMPLES: u32 = 10;
+
+/// Number of ledger samples requested from the oracle.
+const TWAP_SAMPLE_LEDGERS: u32 = 10;
 
 /// Default proposal expiry: 7 days in seconds.
 const DEFAULT_PROPOSAL_EXPIRY_SECS: u64 = 7 * 24 * 3600;
@@ -338,12 +381,29 @@ const TTL_EXTEND_TO_LEDGERS: u32 = LEDGERS_PER_DAY * 30; // 30 days = 518,400 le
 const INSTANCE_TTL_THRESHOLD: u32 = 50_000_000;
 const INSTANCE_TTL_EXTEND_TO: u32 = 50_000_000;
 
+const ESCROW_TTL_LEDGERS: u32 = 535_000; // ~90 days at 5s/ledger
+type EscrowKey = DataKey;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TtlExtendedEvent {
+    pub job_id: u64,
+    pub new_expiry_ledger: u32,
+}
+
+
+
+fn bump_escrow_ttl(env: &Env, job_id: u64) {
+    let key = EscrowKey::Job(job_id);
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
+    }
+}
+
 fn bump_job_ttl(env: &Env, job_id: u64) {
-    env.storage().persistent().extend_ttl(
-        &get_job_key(job_id),
-        TTL_THRESHOLD_LEDGERS,
-        TTL_EXTEND_TO_LEDGERS,
-    );
+    bump_escrow_ttl(env, job_id);
 }
 
 fn bump_job_count_ttl(env: &Env) {
@@ -429,6 +489,119 @@ fn require_state_expirable(job: &Job) -> Result<(), EscrowError> {
         return Err(EscrowError::InvalidStatus);
     }
     Ok(())
+}
+
+/// Query the configured price oracle for the TWAP of `token` quoted in XLM
+/// stroops (scaled by [`PRICE_SCALE`]) over the last [`TWAP_SAMPLE_LEDGERS`]
+/// ledgers.
+///
+/// The oracle is expected to expose:
+/// `twap(token: Address, quote: Address, sample_ledgers: u32) -> (i128 price, u32 samples)`
+///
+/// Returns `OracleUnavailable` if no oracle is configured, the cross-contract
+/// call traps, or the oracle reports fewer than [`MIN_TWAP_SAMPLES`] samples or a
+/// non-positive price.
+fn fetch_twap_price(env: &Env, token: &Address) -> Result<(i128, u32), EscrowError> {
+    let oracle: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::PriceOracle)
+        .ok_or(EscrowError::OracleUnavailable)?;
+
+    // The native XLM SAC address is the quote asset (price denominated in XLM).
+    let quote = env.current_contract_address();
+
+    let args = soroban_sdk::vec![
+        env,
+        token.clone().into_val(env),
+        quote.into_val(env),
+        TWAP_SAMPLE_LEDGERS.into_val(env),
+    ];
+
+    // `try_invoke_contract` surfaces a host error as Err rather than trapping,
+    // so an unavailable oracle becomes OracleUnavailable instead of a panic.
+    let result = env.try_invoke_contract::<(i128, u32), soroban_sdk::Error>(
+        &oracle,
+        &Symbol::new(env, "twap"),
+        args,
+    );
+
+    let (price, samples) = match result {
+        Ok(Ok(value)) => value,
+        _ => return Err(EscrowError::OracleUnavailable),
+    };
+
+    if price <= 0 || samples < MIN_TWAP_SAMPLES {
+        return Err(EscrowError::OracleUnavailable);
+    }
+
+    Ok((price, samples))
+}
+
+/// Compute `amount * twap_price / PRICE_SCALE` in XLM stroops with overflow-safe
+/// arithmetic. Returns [`EscrowError::ValueOverflow`] instead of wrapping or
+/// panicking for any `amount`/`twap_price` pair.
+fn compute_deposited_value(amount: i128, twap_price: i128) -> Result<i128, EscrowError> {
+    amount
+        .checked_mul(twap_price)
+        .ok_or(EscrowError::ValueOverflow)?
+        .checked_div(PRICE_SCALE)
+        .ok_or(EscrowError::ValueOverflow)
+}
+
+/// Validate that depositing `amount` of `token` is worth at least
+/// `agreed_value_stroops`, within `max_slippage_bps` downside tolerance, using a
+/// TWAP from the oracle. Returns the audit [`RateSnapshot`] on success.
+///
+/// When `agreed_value_stroops == 0` the check is bypassed (e.g. native XLM jobs)
+/// and an empty snapshot is returned without contacting the oracle.
+fn validate_deposit_value(
+    env: &Env,
+    token: &Address,
+    amount: i128,
+    agreed_value_stroops: i128,
+    max_slippage_bps: u32,
+) -> Result<RateSnapshot, EscrowError> {
+    if agreed_value_stroops == 0 {
+        return Ok(RateSnapshot {
+            twap_price: 0,
+            samples: 0,
+            agreed_value_stroops: 0,
+            deposited_value: 0,
+            max_slippage_bps,
+            ledger: env.ledger().sequence(),
+        });
+    }
+
+    let (twap_price, samples) = fetch_twap_price(env, token)?;
+
+    // deposited_value = amount * twap_price / PRICE_SCALE, with overflow checks
+    // so adversarial amount/price values can never wrap i128.
+    let deposited_value = compute_deposited_value(amount, twap_price)?;
+
+    // Minimum acceptable value after applying slippage tolerance:
+    // agreed * (10000 - slippage_bps) / 10000.
+    let bps_factor = 10_000i128
+        .checked_sub(max_slippage_bps as i128)
+        .ok_or(EscrowError::ValueOverflow)?;
+    let min_value = agreed_value_stroops
+        .checked_mul(bps_factor)
+        .ok_or(EscrowError::ValueOverflow)?
+        .checked_div(10_000)
+        .ok_or(EscrowError::ValueOverflow)?;
+
+    if deposited_value < min_value {
+        return Err(EscrowError::InsufficientValue);
+    }
+
+    Ok(RateSnapshot {
+        twap_price,
+        samples,
+        agreed_value_stroops,
+        deposited_value,
+        max_slippage_bps,
+        ledger: env.ledger().sequence(),
+    })
 }
 
 #[contract]
@@ -540,6 +713,36 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false)
+    }
+
+    /// Configure the price oracle contract used for exchange-rate parity checks.
+    /// Admin (registered signer) only. The oracle must expose
+    /// `twap(token: Address, quote: Address, sample_ledgers: u32) -> (i128, u32)`.
+    pub fn set_price_oracle(
+        env: Env,
+        admin: Address,
+        oracle: Address,
+    ) -> Result<(), EscrowError> {
+        admin.require_auth();
+        if !is_signer(&env, &admin) {
+            return Err(EscrowError::NotAdmin);
+        }
+        env.storage().instance().set(&DataKey::PriceOracle, &oracle);
+        Ok(())
+    }
+
+    /// Return the configured price oracle address, if any.
+    pub fn get_price_oracle(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PriceOracle)
+    }
+
+    /// Return the exchange-rate parity snapshot recorded when the job was funded.
+    /// `None` for jobs funded without oracle validation (legacy / XLM-only).
+    pub fn get_rate_snapshot(env: Env, job_id: u64) -> Option<RateSnapshot> {
+        bump_escrow_ttl(&env, job_id);
+        env.storage()
+            .persistent()
+            .get(&DataKey::RateSnapshot(job_id))
     }
 
     pub fn propose_admin_action(
@@ -976,7 +1179,21 @@ impl EscrowContract {
     }
 
     /// Fund the escrow for a job. The client transfers the total amount to this contract.
-    pub fn fund_job(env: Env, job_id: u64, client: Address) -> Result<(), EscrowError> {
+    ///
+    /// `agreed_value_stroops` is the off-chain-agreed job value expressed in XLM
+    /// stroops. When it is non-zero, the contract queries the configured price
+    /// oracle for a TWAP of `job.token` and rejects the deposit with
+    /// [`EscrowError::InsufficientValue`] if its value falls below the agreed
+    /// value minus `max_slippage_bps`. Passing `agreed_value_stroops = 0` bypasses
+    /// the oracle check (e.g. for native-XLM jobs and the legacy migration path).
+    pub fn fund_job(
+        env: Env,
+        job_id: u64,
+        client: Address,
+        agreed_value_stroops: i128,
+        max_slippage_bps: u32,
+    ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         let mut job: Job = env
@@ -992,7 +1209,7 @@ impl EscrowContract {
         if job.client != client {
             return Err(EscrowError::Unauthorized);
         }
-        
+
         // STATE VALIDATION: Job must be in Created state to be funded
         require_state_created(&job)?;
 
@@ -1008,6 +1225,15 @@ impl EscrowContract {
             return Err(EscrowError::InvalidAmount);
         }
 
+        // Exchange-rate parity check (no-op when agreed_value_stroops == 0).
+        let snapshot = validate_deposit_value(
+            &env,
+            &job.token,
+            job.total_amount,
+            agreed_value_stroops,
+            max_slippage_bps,
+        )?;
+
         let token_client = token::Client::new(&env, &job.token);
         token_client.transfer(&client, &env.current_contract_address(), &job.total_amount);
 
@@ -1015,6 +1241,18 @@ impl EscrowContract {
         job.status = JobStatus::Funded;
         env.storage().persistent().set(&get_job_key(job_id), &job);
         bump_job_ttl(&env, job_id);
+
+        // Persist the parity snapshot for audit / UI when the oracle was consulted.
+        if agreed_value_stroops != 0 {
+            env.storage()
+                .persistent()
+                .set(&DataKey::RateSnapshot(job_id), &snapshot);
+            env.storage().persistent().extend_ttl(
+                &DataKey::RateSnapshot(job_id),
+                TTL_THRESHOLD_LEDGERS,
+                TTL_EXTEND_TO_LEDGERS,
+            );
+        }
 
         // Emit event
         env.events().publish(
@@ -1043,6 +1281,7 @@ impl EscrowContract {
         job_id: u64,
         amount: i128,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         client.require_auth();
@@ -1093,6 +1332,7 @@ impl EscrowContract {
         job_id: u64,
         resolution: DisputeResolution,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         let mut job: Job = env
@@ -1213,6 +1453,7 @@ impl EscrowContract {
         milestone_id: u32,
         freelancer: Address,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         freelancer.require_auth();
         require_not_paused(&env)?;
 
@@ -1285,6 +1526,7 @@ impl EscrowContract {
         milestone_id: u32,
         client: Address,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
 
@@ -1406,6 +1648,7 @@ impl EscrowContract {
         milestone_indices: Vec<u32>,
         client: Address,
     ) -> Result<i128, EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
 
@@ -1544,6 +1787,7 @@ impl EscrowContract {
         milestone_id: u32,
         caller: Address,
     ) -> Result<u64, EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         caller.require_auth();
         require_not_paused(&env)?;
 
@@ -1603,6 +1847,7 @@ impl EscrowContract {
         milestone_id: u32,
         caller: Address,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         caller.require_auth();
         require_not_paused(&env)?;
 
@@ -1738,6 +1983,7 @@ impl EscrowContract {
         amount: i128,
         client: Address,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
 
@@ -1865,6 +2111,7 @@ impl EscrowContract {
         milestone_index: u32,
         client: Address,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
 
@@ -1988,6 +2235,7 @@ impl EscrowContract {
     /// * `WorkInProgress`    — at least one milestone is `InProgress` or `Submitted`;
     ///                         the client must open a dispute instead.
     pub fn cancel_job(env: Env, job_id: u64, client: Address) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
 
@@ -2047,6 +2295,7 @@ impl EscrowContract {
     /// Only the client can call this. Refund excludes amounts for already-approved milestones.
     /// Fails if the freelancer has a pending (submitted) milestone awaiting approval.
     pub fn claim_refund(env: Env, job_id: u64, client: Address) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
 
@@ -2130,6 +2379,7 @@ impl EscrowContract {
         job_id: u64,
         amount: i128,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         caller.require_auth();
         require_not_paused(&env)?;
 
@@ -2243,6 +2493,7 @@ impl EscrowContract {
         job_id: u64,
         new_milestones: Vec<Milestone>,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         caller.require_auth();
@@ -2366,6 +2617,7 @@ impl EscrowContract {
     /// * `NotAuthorizedForProposalAction` — if caller is the proposer or not a party
     /// * `InsufficientTopUp` — if new_total > old_total and top-up transfer fails
     pub fn accept_revision(env: Env, caller: Address, job_id: u64) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         caller.require_auth();
@@ -2503,6 +2755,7 @@ impl EscrowContract {
     /// * `ProposalNotPending` — if the proposal is not Pending
     /// * `NotAuthorizedForProposalAction` — if caller is the proposer or not a party
     pub fn reject_revision(env: Env, caller: Address, job_id: u64) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         caller.require_auth();
@@ -2577,6 +2830,7 @@ impl EscrowContract {
         caller: Address,
         job_id: u64,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         caller.require_auth();
 
         // 1. Load job
@@ -2634,6 +2888,7 @@ impl EscrowContract {
         caller: Address,
         job_id: u64,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         caller.require_auth();
 
         // Validate job exists.
@@ -2736,6 +2991,7 @@ impl EscrowContract {
     /// * `DeadlineNotPassed` — `env.ledger().timestamp() <= job.job_deadline`.
     /// * `InvalidStatus`     — job is already `Completed`, `Cancelled`, or `Expired`.
     pub fn expire_job(env: Env, job_id: u64) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         let mut job: Job = env
@@ -2785,6 +3041,7 @@ impl EscrowContract {
 
     /// Get job details by ID.
     pub fn get_job(env: Env, job_id: u64) -> Result<Job, EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         let job: Job = env
             .storage()
             .persistent()
@@ -2807,6 +3064,7 @@ impl EscrowContract {
 
     /// Check if a milestone is overdue.
     pub fn is_milestone_overdue(env: Env, job_id: u64, milestone_id: u32) -> bool {
+        bump_escrow_ttl(&env, job_id);
         if let Some(job) = env
             .storage()
             .persistent()
@@ -2826,6 +3084,7 @@ impl EscrowContract {
         milestone_id: u32,
         new_deadline: u64,
     ) -> Result<(), EscrowError> {
+        bump_escrow_ttl(&env, job_id);
         require_not_paused(&env)?;
 
         let mut job: Job = env
@@ -2896,6 +3155,39 @@ impl EscrowContract {
         // Extend TTL for the escrow storage key
         bump_job_ttl(&env, escrow_id);
 
+        Ok(())
+    }
+
+    /// Extend the TTL of an active escrow.
+    /// Returns JobNotFound if the job is not found or archived.
+    pub fn extend_escrow_ttl(env: Env, job_id: u64) -> Result<(), EscrowError> {
+        let key = DataKey::Job(job_id);
+        if !env.storage().persistent().has(&key) {
+            return Err(EscrowError::JobNotFound);
+        }
+        bump_escrow_ttl(&env, job_id);
+
+        let new_expiry_ledger = env.ledger().sequence() + ESCROW_TTL_LEDGERS;
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("ttl_ext")),
+            TtlExtendedEvent {
+                job_id,
+                new_expiry_ledger,
+            },
+        );
+        Ok(())
+    }
+
+    /// Restore an archived escrow entry.
+    /// Bumps the TTL to keep the escrow active.
+    pub fn restore_escrow(env: Env, job_id: u64) -> Result<(), EscrowError> {
+        let key = DataKey::Job(job_id);
+
+        if !env.storage().persistent().has(&key) {
+            return Err(EscrowError::JobNotFound);
+        }
+
+        bump_escrow_ttl(&env, job_id);
         Ok(())
     }
 }

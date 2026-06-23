@@ -199,11 +199,29 @@ export interface Vote {
 
 export interface DisputeEvidence {
   id: string;
-  ipfsHash: string;
+  ipfsHash?: string;
   fileName: string;
   fileType: string;
+  size?: number;
+  sizeFormatted?: string;
+  sha256?: string;
+  anchorTxHash?: string;
   uploadedAt: string;
-  uploaderAddress: string;
+  uploaderAddress?: string;
+  url?: string;
+  uploader?: {
+    id: string;
+    username: string;
+    walletAddress?: string;
+  };
+}
+
+export interface EvidenceVerification {
+  intact: boolean;
+  storedHash: string;
+  computedHash: string;
+  anchorTxHash?: string;
+  fileName: string;
 }
 
 export interface Dispute {

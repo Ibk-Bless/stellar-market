@@ -3,7 +3,7 @@ import { PrismaClient, EscrowStatus, NotificationType } from "@prisma/client";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { walletSourceGuard } from "../middleware/wallet-guard";
 import { asyncHandler } from "../middleware/error";
-import { ContractService } from "../services/contract.service";
+import { ContractService, ContractSimulationError } from "../services/contract.service";
 import { NotificationService } from "../services/notification.service";
 import { config } from "../config";
 import {
@@ -15,6 +15,10 @@ import {
 
 const router = Router();
 const prisma = new PrismaClient();
+
+const STROOPS_PER_XLM = 10_000_000;
+/** Default tolerated downside deviation for funding parity: 2%. */
+const DEFAULT_MAX_SLIPPAGE_BPS = 200;
 const indexerCursorState: {
   cursor: string | null;
   updatedAt: string;
@@ -95,7 +99,11 @@ router.post("/init-submit", authenticate, walletSourceGuard, asyncHandler(async 
  * Request XDR to fund a job on-chain.
  */
 router.post("/init-fund", authenticate, walletSourceGuard, asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { jobId } = req.body;
+  const { jobId, maxSlippageBps, bypassOracle } = req.body as {
+    jobId?: string;
+    maxSlippageBps?: number;
+    bypassOracle?: boolean;
+  };
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     include: { client: true }
@@ -105,8 +113,84 @@ router.post("/init-fund", authenticate, walletSourceGuard, asyncHandler(async (r
     return res.status(404).json({ error: "On-chain job not found. Create it first." });
   }
 
-  const xdr = await ContractService.buildFundJobTx(job.client.walletAddress!, job.contractJobId!);
-  res.json({ xdr });
+  // Derive the agreed job value (in XLM stroops) from the job's budget so the
+  // contract can validate the deposit against the DEX TWAP. A native-XLM job, or
+  // an explicit opt-out, passes 0 to bypass the oracle check.
+  const agreedValueStroops = bypassOracle
+    ? 0n
+    : BigInt(Math.round(job.budget * STROOPS_PER_XLM));
+  const slippageBps =
+    typeof maxSlippageBps === "number" && maxSlippageBps >= 0 && maxSlippageBps <= 10_000
+      ? Math.floor(maxSlippageBps)
+      : DEFAULT_MAX_SLIPPAGE_BPS;
+
+  const effectiveSlippage = agreedValueStroops === 0n ? 0 : slippageBps;
+
+  // Pre-flight the parity check so an under-value or oracle failure is returned
+  // as a structured 422 instead of letting the user sign a doomed transaction.
+  if (agreedValueStroops > 0n) {
+    const sim = await ContractService.simulateFundJob(
+      job.client.walletAddress!,
+      job.contractJobId!,
+      agreedValueStroops,
+      effectiveSlippage,
+    );
+    if (!sim.ok && sim.reason === "INSUFFICIENT_VALUE") {
+      return res.status(422).json({
+        error: "InsufficientValue",
+        message:
+          "The deposit is worth less than the agreed job value at the current exchange rate.",
+        agreedValueStroops: agreedValueStroops.toString(),
+        maxSlippageBps: effectiveSlippage,
+      });
+    }
+    if (!sim.ok && sim.reason === "ORACLE_UNAVAILABLE") {
+      return res.status(503).json({
+        error: "OracleUnavailable",
+        message: "The exchange-rate oracle is currently unavailable. Try again shortly.",
+      });
+    }
+  }
+
+  const xdr = await ContractService.buildFundJobTx(
+    job.client.walletAddress!,
+    job.contractJobId!,
+    agreedValueStroops,
+    effectiveSlippage,
+  );
+  res.json({
+    xdr,
+    agreedValueStroops: agreedValueStroops.toString(),
+    maxSlippageBps: effectiveSlippage,
+  });
+}));
+
+/**
+ * Read the stored exchange-rate parity (TWAP) snapshot for a job, for UI display.
+ */
+router.get("/:jobId/rate-snapshot", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const jobId = req.params.jobId as string;
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: { contractJobId: true },
+  });
+
+  if (!job || !job.contractJobId) {
+    return res.status(404).json({ error: "On-chain job not found." });
+  }
+
+  try {
+    const snapshot = await ContractService.getRateSnapshot(job.contractJobId);
+    if (!snapshot) {
+      return res.status(404).json({ error: "No rate snapshot recorded for this job." });
+    }
+    res.json({ jobId, snapshot });
+  } catch (err) {
+    if (err instanceof ContractSimulationError) {
+      return res.status(404).json({ error: "No rate snapshot recorded for this job." });
+    }
+    throw err;
+  }
 }));
 
 /**
@@ -540,6 +624,29 @@ router.put(
     indexerCursorState.updatedAt = new Date().toISOString();
     return res.json(indexerCursorState);
   }),
+);
+
+router.get(
+  "/:jobId/ttl",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const jobId = req.params.jobId as string;
+    const job = await prisma.job.findUnique({
+      where: { id: jobId },
+      select: { contractJobId: true },
+    });
+
+    if (!job || !job.contractJobId) {
+      return res.status(404).json({ error: "Job or escrow not found." });
+    }
+
+    const ttlInfo = await ContractService.getEscrowTtl(job.contractJobId);
+    if (!ttlInfo) {
+      return res.status(404).json({ error: "Escrow not found on-chain." });
+    }
+
+    res.json(ttlInfo);
+  })
 );
 
 export default router;

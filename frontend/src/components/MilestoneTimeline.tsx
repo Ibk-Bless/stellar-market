@@ -8,10 +8,12 @@ import {
   DollarSign,
   Clock,
   AlertTriangle,
+  WifiOff,
 } from "lucide-react";
 
 import StatusBadge from "@/components/StatusBadge";
 import type { Milestone } from "@/types";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
 
 type MilestoneTimelineProps = {
   milestones: Milestone[];
@@ -89,6 +91,8 @@ export default function MilestoneTimeline({
   recentlyApprovedMilestoneId,
   confirmingMilestoneId,
 }: MilestoneTimelineProps) {
+  const { isOnline } = useOfflineStatus();
+  const isOffline = !isOnline;
   const completedCount = milestones.filter(
     (m) => m.status === "APPROVED",
   ).length;
@@ -227,36 +231,54 @@ export default function MilestoneTimeline({
                   <div className="mt-4 flex flex-wrap gap-2">
                     {isFreelancerOnJob &&
                       milestone.status === "IN_PROGRESS" && (
-                        <button
-                          type="button"
-                          disabled={isActioning}
-                          onClick={() => onSubmitMilestone(milestone.id)}
-                          className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50"
-                        >
-                          {isActioning ? (
-                            <Loader2 className="animate-spin" size={14} />
-                          ) : (
-                            <CheckCircle size={14} />
+                        <div className="relative group">
+                          <button
+                            type="button"
+                            disabled={isActioning || isOffline}
+                            onClick={() => onSubmitMilestone(milestone.id)}
+                            className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isActioning ? (
+                              <Loader2 className="animate-spin" size={14} />
+                            ) : isOffline ? (
+                              <WifiOff size={14} />
+                            ) : (
+                              <CheckCircle size={14} />
+                            )}
+                            Submit Milestone
+                          </button>
+                          {isOffline && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                              Blockchain transactions require an internet connection
+                            </div>
                           )}
-                          Submit Milestone
-                        </button>
+                        </div>
                       )}
 
                     {isClient && milestone.status === "SUBMITTED" && (
                       <>
-                        <button
-                          type="button"
-                          disabled={isActioning}
-                          onClick={() => onApproveMilestone(milestone.id)}
-                          className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50"
-                        >
-                          {isActioning ? (
-                            <Loader2 className="animate-spin" size={14} />
-                          ) : (
-                            <ShieldCheck size={14} />
+                        <div className="relative group">
+                          <button
+                            type="button"
+                            disabled={isActioning || isOffline}
+                            onClick={() => onApproveMilestone(milestone.id)}
+                            className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isActioning ? (
+                              <Loader2 className="animate-spin" size={14} />
+                            ) : isOffline ? (
+                              <WifiOff size={14} />
+                            ) : (
+                              <ShieldCheck size={14} />
+                            )}
+                            Approve
+                          </button>
+                          {isOffline && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                              Blockchain transactions require an internet connection
+                            </div>
                           )}
-                          Approve
-                        </button>
+                        </div>
                         <button
                           type="button"
                           disabled={isActioning}

@@ -1,10 +1,12 @@
 import { Router, Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { validate } from "../middleware/validation";
+import { config } from "../config";
 import {
   upload,
   UPLOAD_DIR,
@@ -23,6 +25,8 @@ const uploadSchema = {
   body: z.object({
     jobId: z.string().optional(),
     disputeId: z.string().optional(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/, "Invalid SHA-256 hash").optional(),
+    anchorTxHash: z.string().min(1).optional(),
   }),
 };
 
@@ -70,9 +74,8 @@ router.post(
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const { jobId, disputeId } = req.body;
+      const { jobId, disputeId, sha256, anchorTxHash } = req.body;
 
-      // Validate that at least one of jobId or disputeId is provided
       if (!jobId && !disputeId) {
         // Clean up uploaded file
         fs.unlinkSync(req.file.path);
@@ -154,7 +157,27 @@ router.post(
         }
       }
 
-      // Create attachment record
+      if (anchorTxHash) {
+        try {
+          const horizonRes = await fetch(
+            `${config.stellar.horizonUrl}/transactions/${anchorTxHash}`,
+          );
+          if (!horizonRes.ok) {
+            fs.unlinkSync(req.file.path);
+            return res.status(422).json({
+              error:
+                "Anchor transaction not found on the Stellar network. Provide a valid transaction hash.",
+            });
+          }
+        } catch {
+          fs.unlinkSync(req.file.path);
+          return res.status(502).json({
+            error:
+              "Unable to verify anchor transaction on the Stellar network. Please try again.",
+          });
+        }
+      }
+
       const attachment = await prisma.attachment.create({
         data: {
           uploaderId: req.userId!,
@@ -165,6 +188,8 @@ router.post(
           mimeType: validation.detectedType || req.file.mimetype,
           size: req.file.size,
           url: `/api/uploads/${req.file.filename}`,
+          sha256: sha256 || null,
+          anchorTxHash: anchorTxHash || null,
         },
         include: {
           uploader: {
@@ -280,6 +305,60 @@ router.get(
     } catch (error) {
       console.error("Error downloading file:", error);
       res.status(500).json({ error: "Failed to download file" });
+    }
+  },
+);
+
+/**
+ * GET /api/uploads/:id/verify
+ * Re-compute SHA-256 of the stored file and compare against the recorded hash
+ */
+router.get(
+  "/:id/verify",
+  authenticate,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const attachment = await prisma.attachment.findUnique({
+        where: { id: req.params.id as string },
+      });
+
+      if (!attachment) {
+        return res.status(404).json({ error: "Attachment not found" });
+      }
+
+      if (!attachment.sha256) {
+        return res.status(400).json({
+          error: "No integrity hash recorded for this attachment",
+        });
+      }
+
+      const filePath = path.join(UPLOAD_DIR, attachment.filename);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "File not found on server" });
+      }
+
+      const hash = crypto.createHash("sha256");
+      const stream = fs.createReadStream(filePath);
+
+      await new Promise<void>((resolve, reject) => {
+        stream.on("data", (chunk) => hash.update(chunk));
+        stream.on("end", resolve);
+        stream.on("error", reject);
+      });
+
+      const computedHash = hash.digest("hex");
+      const intact = computedHash === attachment.sha256;
+
+      res.json({
+        intact,
+        storedHash: attachment.sha256,
+        computedHash,
+        anchorTxHash: attachment.anchorTxHash,
+        fileName: attachment.originalName,
+      });
+    } catch (error) {
+      console.error("Error verifying file integrity:", error);
+      res.status(500).json({ error: "Failed to verify file integrity" });
     }
   },
 );

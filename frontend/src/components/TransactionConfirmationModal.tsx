@@ -13,6 +13,8 @@ type TransactionConfirmationModalProps = {
   transactionXdr: string | null;
   onClose: () => void;
   onConfirm: (preparedXdr: string) => Promise<void>;
+  /** Optional content rendered above the transaction preview (e.g. rate info). */
+  extraContent?: React.ReactNode;
 };
 
 function formatStroops(value: bigint): string {
@@ -30,6 +32,7 @@ export default function TransactionConfirmationModal({
   transactionXdr,
   onClose,
   onConfirm,
+  extraContent,
 }: TransactionConfirmationModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -112,6 +115,7 @@ export default function TransactionConfirmationModal({
         </div>
 
         <div className="space-y-4 px-5 py-5">
+          {extraContent}
           {loadingPreview && (
             <div className="flex items-center gap-3 rounded-xl border border-theme-border bg-theme-card px-4 py-4 text-sm text-theme-text">
               <Loader2 className="animate-spin text-stellar-blue" size={18} />

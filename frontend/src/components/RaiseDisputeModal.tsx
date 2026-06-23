@@ -145,13 +145,26 @@ export default function RaiseDisputeModal({
       const newDisputeId: string | undefined =
         confirmRes.data?.dispute?.id ?? confirmRes.data?.id;
 
-      // 4. Upload evidence files if any
       if (selectedFiles.length > 0 && newDisputeId) {
         setUploading(true);
         setUploadProgress(0);
 
+        const hashes: string[] = [];
+        for (const file of selectedFiles) {
+          const buffer = await file.arrayBuffer();
+          const hashBuffer = await window.crypto.subtle.digest(
+            "SHA-256",
+            buffer,
+          );
+          const hex = Array.from(new Uint8Array(hashBuffer))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+          hashes.push(hex);
+        }
+
         const formData = new FormData();
         selectedFiles.forEach((file) => formData.append("files", file));
+        formData.append("hashes", JSON.stringify(hashes));
 
         try {
           await axios.post(
@@ -173,7 +186,6 @@ export default function RaiseDisputeModal({
             },
           );
         } catch {
-          // Evidence upload failure is non-blocking — dispute already created
           setError(
             "Dispute created, but evidence upload failed. You can retry from the dispute page.",
           );

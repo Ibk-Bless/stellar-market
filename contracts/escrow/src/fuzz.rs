@@ -96,7 +96,7 @@ fn fuzz_deposit_and_release_basic() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &job_deadline, &604800, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         let job = contract.get_job(&job_id);
         assert_eq!(job.funded_amount, total_amount);
@@ -147,7 +147,7 @@ fn fuzz_partial_payments() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &1500, &604800, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         contract
             .submit_milestone(&job_id, &0, &freelancer);
@@ -211,7 +211,7 @@ fn fuzz_boundary_values() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &1500, &604800, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         let job = contract.get_job(&job_id);
         assert_eq!(job.total_amount, boundary);
@@ -270,7 +270,7 @@ fn fuzz_refund_flows() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &job_deadline, &604800, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         if random_bool(&mut seed) {
             contract.cancel_job(&job_id, &client);
@@ -322,7 +322,7 @@ fn fuzz_claim_refund_after_expiry() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &job_deadline, &grace_period, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         env.ledger().with_mut(|l| l.timestamp = job_deadline + grace_period + 1);
 
@@ -381,7 +381,7 @@ fn fuzz_multi_token_scenarios() {
         let job = contract.get_job(&job_id);
         assert_eq!(job.token, token);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         for (m_idx, _) in milestones.iter().enumerate() {
             contract
@@ -426,7 +426,7 @@ fn fuzz_balance_invariants() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &1500, &604800, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         contract
             .submit_milestone(&job_id, &0, &freelancer);
@@ -483,7 +483,7 @@ fn fuzz_approve_milestones_batch() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &job_deadline, &604800, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         let mut indices = Vec::new(&env);
         for m in 0..milestones.len() {
@@ -529,7 +529,7 @@ fn fuzz_top_up_escrow() {
         let job_id = contract
             .create_job(&client, &freelancer, &token, &milestones, &1500, &604800, &518_400u32);
 
-        contract.fund_job(&job_id, &client);
+        contract.fund_job(&job_id, &client, &0, &0);
 
         // After fund_job, funded_amount == total_amount. top_up_escrow is only
         // meaningful after a revision proposal raises total_amount; calling it
@@ -565,7 +565,7 @@ fn fuzz_no_panic_on_edge_cases() {
     let job_id = contract
         .create_job(&client, &freelancer, &token, &milestones, &1500, &604800, &518_400u32);
 
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     let job = contract.get_job(&job_id);
     assert_eq!(job.funded_amount, 1);
@@ -578,4 +578,49 @@ fn fuzz_no_panic_on_edge_cases() {
 
     let final_job = contract.get_job(&job_id);
     assert_eq!(final_job.status, JobStatus::Completed);
+}
+
+/// Fuzz the exchange-rate value computation: random `amount` and `twap_price`
+/// values must never overflow i128 in `deposited_value` — the computation either
+/// returns a value or `EscrowError::ValueOverflow`, but never wraps or panics.
+#[test]
+fn fuzz_deposited_value_never_overflows() {
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+
+    // Build a wide, non-negative i128 from multiple 32-bit draws so values can
+    // actually reach the overflow boundary of checked_mul.
+    fn wide(seed: &mut u64) -> i128 {
+        let hi = random_u32(seed) as i128;
+        let mid = random_u32(seed) as i128;
+        let lo = random_u32(seed) as i128;
+        ((hi << 80) | (mid << 40) | lo) & i128::MAX
+    }
+
+    for _ in 0..2000 {
+        // Mix in occasional extreme magnitudes to probe the overflow boundary.
+        let amount = if random_bool(&mut seed) {
+            wide(&mut seed)
+        } else {
+            random_i128(&mut seed, 1_000_000_000_000)
+        };
+        let price = if random_bool(&mut seed) {
+            wide(&mut seed)
+        } else {
+            random_i128(&mut seed, 100_000_000)
+        };
+
+        match compute_deposited_value(amount, price) {
+            Ok(value) => {
+                // When it succeeds, the result must equal the checked math exactly.
+                let expected = amount
+                    .checked_mul(price)
+                    .map(|p| p / PRICE_SCALE);
+                assert_eq!(Some(value), expected);
+            }
+            Err(e) => {
+                // The only failure mode is a detected overflow.
+                assert_eq!(e, EscrowError::ValueOverflow);
+            }
+        }
+    }
 }

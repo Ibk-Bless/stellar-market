@@ -1,11 +1,25 @@
 {
-    "name": "StellarMarket",
+    "name": "StellarMarket — Decentralized Freelance Marketplace",
     "short_name": "StellarMarket",
+    "description": "A decentralized freelance marketplace built on Stellar/Soroban with escrow payments, on-chain reputation, and dispute resolution.",
     "icons": [
         {
             "src": "/favicon.svg",
             "sizes": "any",
-            "type": "image/svg+xml"
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
         },
         {
             "src": "/apple-touch-icon.png",
@@ -13,7 +27,11 @@
             "type": "image/png"
         }
     ],
+    "start_url": "/",
+    "scope": "/",
     "theme_color": "#3E54CF",
     "background_color": "#0a0b14",
-    "display": "standalone"
+    "display": "standalone",
+    "orientation": "any",
+    "categories": ["business", "finance", "productivity"]
 }

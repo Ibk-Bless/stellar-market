@@ -91,6 +91,7 @@ enum NotificationType {
   DISPUTE_RESOLVED
   NEW_MESSAGE
   BADGE_AWARDED
+  ESCROW_TTL_WARNING
 }
 
 enum BadgeTier {
@@ -159,6 +160,7 @@ model User {
   notificationPreference NotificationPreference?
   portfolioItems     PortfolioItem[]
   webhooks           Webhook[]
+  pushSubscriptions  PushSubscription[] @relation("UserPushSubscriptions")
 
   referralCode       String?   @unique
   referredById       String?
@@ -351,6 +353,8 @@ model Attachment {
   mimeType     String
   size         Int
   url          String
+  sha256       String?
+  anchorTxHash String?
   createdAt    DateTime  @default(now())
 
   uploader  User       @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
@@ -602,4 +606,17 @@ model EscrowEvent {
 
   @@unique([contractJobId, eventType, ledgerSeq])
   @@index([jobId, ledgerSeq])
+}
+
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  createdAt  DateTime @default(now())
+
+  user User @relation("UserPushSubscriptions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

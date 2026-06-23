@@ -1,9 +1,15 @@
 import { Router, Request, Response } from "express";
-import { DisputeStatus, UserRole } from "@prisma/client";
+import { DisputeStatus, UserRole, PrismaClient } from "@prisma/client";
+import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { asyncHandler } from "../middleware/error";
 import { validate } from "../middleware/validation";
 import { DisputeService } from "../services/dispute.service";
+import { upload, UPLOAD_DIR } from "../config/upload";
+import { validateFileMimeType, formatFileSize } from "../utils/fileValidation";
+import { config } from "../config";
 import {
   confirmDisputeTransactionSchema,
   createDisputeSchema,
@@ -14,6 +20,19 @@ import {
   resolveDisputeSchema,
   webhookPayloadSchema,
 } from "../schemas/dispute";
+
+const prisma = new PrismaClient();
+
+async function verifyAnchorTxOnHorizon(txHash: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${config.stellar.horizonUrl}/transactions/${txHash}`,
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 const router = Router();
 
@@ -273,6 +292,206 @@ router.post(
     const result = await DisputeService.processWebhook(payload);
 
     res.json(result);
+  }),
+);
+
+/**
+ * POST /api/disputes/:id/evidence
+ * Upload evidence files for a dispute with optional integrity metadata
+ */
+router.post(
+  "/:id/evidence",
+  authenticate,
+  validate({ params: disputeIdParamSchema }),
+  upload.array("files", 5),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const disputeId = req.params.id as string;
+    const files = req.files as Express.Multer.File[];
+
+    if (!files || files.length === 0) {
+      return res.status(400).json({ error: "No files uploaded" });
+    }
+
+    const dispute = await DisputeService.getDisputeById(disputeId);
+    if (!dispute) {
+      for (const f of files) fs.unlinkSync(f.path);
+      return res.status(404).json({ error: "Dispute not found" });
+    }
+
+    const isParticipant =
+      dispute.clientId === req.userId ||
+      dispute.freelancerId === req.userId ||
+      dispute.initiatorId === req.userId;
+
+    if (!isParticipant) {
+      for (const f of files) fs.unlinkSync(f.path);
+      return res.status(403).json({
+        error: "Only dispute participants can upload evidence",
+      });
+    }
+
+    let hashes: string[] = [];
+    let anchorTxHashes: string[] = [];
+    try {
+      hashes = req.body.hashes ? JSON.parse(req.body.hashes) : [];
+      anchorTxHashes = req.body.anchorTxHashes
+        ? JSON.parse(req.body.anchorTxHashes)
+        : [];
+    } catch {
+      hashes = [];
+      anchorTxHashes = [];
+    }
+
+    const attachments = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const validation = await validateFileMimeType(file.path);
+
+      if (!validation.valid) {
+        fs.unlinkSync(file.path);
+        continue;
+      }
+
+      const serverHash = crypto.createHash("sha256");
+      const stream = fs.createReadStream(file.path);
+      await new Promise<void>((resolve, reject) => {
+        stream.on("data", (chunk) => serverHash.update(chunk));
+        stream.on("end", resolve);
+        stream.on("error", reject);
+      });
+      const computedSha256 = serverHash.digest("hex");
+
+      const clientSha256 = hashes[i] || null;
+      if (clientSha256 && clientSha256 !== computedSha256) {
+        fs.unlinkSync(file.path);
+        continue;
+      }
+
+      const candidateAnchorTx = anchorTxHashes[i] || null;
+      if (candidateAnchorTx) {
+        const txExists = await verifyAnchorTxOnHorizon(candidateAnchorTx);
+        if (!txExists) {
+          fs.unlinkSync(file.path);
+          continue;
+        }
+      }
+
+      const attachment = await prisma.attachment.create({
+        data: {
+          uploaderId: req.userId!,
+          disputeId,
+          filename: file.filename,
+          originalName: file.originalname,
+          mimeType: validation.detectedType || file.mimetype,
+          size: file.size,
+          url: `/api/uploads/${file.filename}`,
+          sha256: computedSha256,
+          anchorTxHash: candidateAnchorTx,
+        },
+      });
+
+      attachments.push({
+        ...attachment,
+        sizeFormatted: formatFileSize(attachment.size),
+      });
+    }
+
+    res.status(201).json({ attachments });
+  }),
+);
+
+/**
+ * GET /api/disputes/:id/evidence
+ * Get all evidence attachments for a dispute with integrity info
+ */
+router.get(
+  "/:id/evidence",
+  authenticate,
+  validate({ params: disputeIdParamSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const disputeId = req.params.id as string;
+
+    const attachments = await prisma.attachment.findMany({
+      where: { disputeId },
+      include: {
+        uploader: {
+          select: {
+            id: true,
+            username: true,
+            walletAddress: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({
+      evidence: attachments.map((att) => ({
+        id: att.id,
+        fileName: att.originalName,
+        fileType: att.mimeType,
+        size: att.size,
+        sizeFormatted: formatFileSize(att.size),
+        sha256: att.sha256,
+        anchorTxHash: att.anchorTxHash,
+        uploadedAt: att.createdAt.toISOString(),
+        uploader: att.uploader,
+        url: att.url,
+      })),
+    });
+  }),
+);
+
+/**
+ * GET /api/disputes/:id/evidence/:evidenceId/verify
+ * Re-compute SHA-256 of the stored evidence file and check integrity
+ */
+router.get(
+  "/:id/evidence/:evidenceId/verify",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const attachment = await prisma.attachment.findFirst({
+      where: {
+        id: req.params.evidenceId as string,
+        disputeId: req.params.id as string,
+      },
+    });
+
+    if (!attachment) {
+      return res.status(404).json({ error: "Evidence not found" });
+    }
+
+    if (!attachment.sha256) {
+      return res.status(400).json({
+        error: "No integrity hash recorded for this evidence",
+      });
+    }
+
+    const filePath = path.join(UPLOAD_DIR, attachment.filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "File not found on server" });
+    }
+
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+
+    await new Promise<void>((resolve, reject) => {
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("end", resolve);
+      stream.on("error", reject);
+    });
+
+    const computedHash = hash.digest("hex");
+    const intact = computedHash === attachment.sha256;
+
+    res.json({
+      intact,
+      storedHash: attachment.sha256,
+      computedHash,
+      anchorTxHash: attachment.anchorTxHash,
+      fileName: attachment.originalName,
+    });
   }),
 );
 

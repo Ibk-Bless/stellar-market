@@ -3,6 +3,8 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 import EmailVerificationBanner from "@/components/EmailVerificationBanner";
+import OfflineBanner from "@/components/OfflineBanner";
+import PushNotificationPrompt from "@/components/PushNotificationPrompt";
 import Footer from "@/components/Footer";
 import Providers from "./providers";
 
@@ -91,8 +93,10 @@ export default function RootLayout({
           </a>
           <Navbar />
           <EmailVerificationBanner />
+          <OfflineBanner />
           <main id="main-content" className="min-h-screen">{children}</main>
           <Footer />
+          <PushNotificationPrompt />
         </Providers>
       </body>
     </html>

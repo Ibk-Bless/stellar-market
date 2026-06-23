@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
-  LineChart,
+  ComposedChart,
+  Bar,
   Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ResponsiveContainer,
 } from "recharts";
 import {
@@ -19,10 +21,13 @@ import {
   Loader2,
   AlertTriangle,
   TrendingUp,
+  CheckCircle2,
+  ExternalLink,
 } from "lucide-react";
 import axios from "axios";
 import StatusBadge from "@/components/StatusBadge";
 import { useAuth } from "@/context/AuthContext";
+import { buildSeries, type WeeklyEarning } from "./earnings/earnings-utils";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
 
@@ -33,9 +38,10 @@ interface EarningsSummary {
   activeEscrow: number;
 }
 
-interface MonthlyEarning {
-  month: string;
+interface CategoryBreakdown {
+  category: string;
   earnings: number;
+  percentage: number;
 }
 
 interface TransactionEarnings {
@@ -58,7 +64,9 @@ interface TransactionEarnings {
 
 interface EarningsResponse {
   summary: EarningsSummary;
-  monthlyEarnings: MonthlyEarning[];
+  weeklyEarnings: WeeklyEarning[];
+  categoryBreakdown: CategoryBreakdown[];
+  range: { from: string; to: string };
   transactions: TransactionEarnings[];
   pagination: {
     page: number;
@@ -68,6 +76,57 @@ interface EarningsResponse {
   };
 }
 
+interface ReconcileResponse {
+  range: { from: string; to: string };
+  summary: {
+    onChainCount: number;
+    dbCount: number;
+    matchedCount: number;
+    onChainOnlyCount: number;
+    dbOnlyCount: number;
+    allMatched: boolean;
+  };
+  onChainOnly: Array<{
+    txHash: string;
+    memoJobId: string | null;
+    amount: number;
+    assetCode: string;
+    createdAt: string;
+    horizonUrl: string;
+  }>;
+}
+
+type RangePreset = "this_month" | "last_3_months" | "this_year";
+
+const RANGE_PRESETS: { value: RangePreset; label: string }[] = [
+  { value: "this_month", label: "This month" },
+  { value: "last_3_months", label: "Last 3 months" },
+  { value: "this_year", label: "This year" },
+];
+
+/** Resolve a preset to a concrete [from, to] ISO window. */
+function resolveRange(preset: RangePreset): { from: string; to: string } {
+  const now = new Date();
+  const to = now.toISOString();
+  let from: Date;
+  switch (preset) {
+    case "this_month":
+      from = new Date(now.getFullYear(), now.getMonth(), 1);
+      break;
+    case "last_3_months":
+      from = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+      break;
+    case "this_year":
+      from = new Date(now.getFullYear(), 0, 1);
+      break;
+  }
+  return { from: from.toISOString(), to };
+}
+
+const authHeader = () => ({
+  Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("token") : ""}`,
+});
+
 const EarningsPage = () => {
   const { user } = useAuth();
   const [summary, setSummary] = useState<EarningsSummary>({
@@ -76,13 +135,19 @@ const EarningsPage = () => {
     pendingRelease: 0,
     activeEscrow: 0,
   });
-  const [monthlyEarnings, setMonthlyEarnings] = useState<MonthlyEarning[]>([]);
+  const [weeklyEarnings, setWeeklyEarnings] = useState<WeeklyEarning[]>([]);
+  const [categories, setCategories] = useState<CategoryBreakdown[]>([]);
   const [transactions, setTransactions] = useState<TransactionEarnings[]>([]);
+  const [reconcile, setReconcile] = useState<ReconcileResponse | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [preset, setPreset] = useState<RangePreset>("this_month");
   const [loading, setLoading] = useState(true);
+  const [reconciling, setReconciling] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const range = useMemo(() => resolveRange(preset), [preset]);
 
   const fetchEarnings = useCallback(async () => {
     if (!user) return;
@@ -94,19 +159,18 @@ const EarningsPage = () => {
       const params = new URLSearchParams({
         page: currentPage.toString(),
         limit: "10",
+        from: range.from,
+        to: range.to,
       });
 
       const response = await axios.get<EarningsResponse>(
         `${API}/freelancers/earnings?${params.toString()}`,
-        {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-        }
+        { headers: authHeader() }
       );
 
       setSummary(response.data.summary);
-      setMonthlyEarnings(response.data.monthlyEarnings);
+      setWeeklyEarnings(response.data.weeklyEarnings);
+      setCategories(response.data.categoryBreakdown);
       setTransactions(response.data.transactions);
       setTotalPages(response.data.pagination.totalPages);
     } catch (err) {
@@ -118,78 +182,87 @@ const EarningsPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [user, currentPage]);
+  }, [user, currentPage, range.from, range.to]);
+
+  const fetchReconciliation = useCallback(async () => {
+    if (!user) return;
+    setReconciling(true);
+    try {
+      const params = new URLSearchParams({ from: range.from, to: range.to });
+      const response = await axios.get<ReconcileResponse>(
+        `${API}/freelancers/earnings/reconcile?${params.toString()}`,
+        { headers: authHeader() }
+      );
+      setReconcile(response.data);
+    } catch {
+      // Reconciliation is best-effort; the chart/table still render without it.
+      setReconcile(null);
+    } finally {
+      setReconciling(false);
+    }
+  }, [user, range.from, range.to]);
 
   useEffect(() => {
     fetchEarnings();
   }, [fetchEarnings]);
 
-  const formatCurrency = (amount: number): string => {
-    return new Intl.NumberFormat("en-US", {
+  useEffect(() => {
+    fetchReconciliation();
+  }, [fetchReconciliation]);
+
+  // Reset to page 1 whenever the range changes.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [preset]);
+
+  const formatCurrency = (amount: number): string =>
+    new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(amount);
-  };
 
-  const formatDate = (dateStr: string): string => {
-    return new Date(dateStr).toLocaleDateString("en-US", {
+  const formatDate = (dateStr: string): string =>
+    new Date(dateStr).toLocaleDateString("en-US", {
       year: "numeric",
       month: "short",
       day: "numeric",
     });
-  };
 
-  const formatMonth = (monthStr: string): string => {
-    const [year, month] = monthStr.split("-");
-    const date = new Date(Number(year), Number(month) - 1);
-    return date.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
-  };
+  const formatWeek = (weekStr: string): string =>
+    new Date(`${weekStr}T00:00:00Z`).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
 
-  const chartData = monthlyEarnings.map((m) => ({
-    month: formatMonth(m.month),
-    earnings: m.earnings,
-  }));
+  const series = useMemo(
+    () =>
+      buildSeries(weeklyEarnings).map((s) => ({
+        ...s,
+        label: formatWeek(s.week),
+      })),
+    [weeklyEarnings]
+  );
 
   const handleExportCSV = async () => {
     setExporting(true);
     try {
-      const allTx: TransactionEarnings[] = [];
-      let page = 1;
-      let hasMore = true;
+      const params = new URLSearchParams({
+        from: range.from,
+        to: range.to,
+        format: "csv",
+      });
+      const response = await axios.get(
+        `${API}/freelancers/earnings/export?${params.toString()}`,
+        { headers: authHeader(), responseType: "blob" }
+      );
 
-      while (hasMore) {
-        const params = new URLSearchParams({ page: page.toString(), limit: "100" });
-        const response = await axios.get<EarningsResponse>(
-          `${API}/freelancers/earnings?${params.toString()}`,
-          {
-            headers: {
-              Authorization: `Bearer ${localStorage.getItem("token")}`,
-            },
-          }
-        );
-        allTx.push(...response.data.transactions);
-        hasMore = page < response.data.pagination.totalPages;
-        page++;
-      }
-
-      const headers = ["Job Title", "Client", "Amount", "Date", "Status", "Transaction Hash"];
-      const rows = allTx.map((tx) => [
-        `"${tx.job?.title ?? "N/A"}"`,
-        `"${tx.job?.client?.username ?? "N/A"}"`,
-        tx.amount.toString(),
-        formatDate(tx.createdAt),
-        tx.type.replace("_", " "),
-        tx.txHash,
-      ]);
-
-      const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const blob = new Blob([response.data], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `earnings-${new Date().toISOString().split("T")[0]}.csv`;
+      a.download = `earnings-${range.from.slice(0, 10)}-to-${range.to.slice(0, 10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -199,7 +272,8 @@ const EarningsPage = () => {
     }
   };
 
-  const isNewAccount = !loading && summary.totalEarned === 0 && transactions.length === 0;
+  const isNewAccount =
+    !loading && summary.totalEarned === 0 && transactions.length === 0;
 
   return (
     <div className="space-y-6 p-4 sm:p-6 bg-theme-bg min-h-screen">
@@ -210,23 +284,40 @@ const EarningsPage = () => {
             Earnings
           </h1>
           <p className="text-theme-text mt-1 text-sm sm:text-base">
-            Track your freelance earnings and payment history
+            Track your freelance earnings, reconcile on-chain payments, and export for taxes
           </p>
         </div>
-        {!loading && !isNewAccount && (
-          <button
-            onClick={handleExportCSV}
-            disabled={exporting}
-            className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm self-start"
+        <div className="flex items-center gap-2 self-start">
+          <label htmlFor="range-preset" className="sr-only">
+            Date range
+          </label>
+          <select
+            id="range-preset"
+            value={preset}
+            onChange={(e) => setPreset(e.target.value as RangePreset)}
+            className="btn-secondary px-3 py-2 text-sm"
           >
-            {exporting ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Download className="w-4 h-4" />
-            )}
-            {exporting ? "Exporting..." : "Export CSV"}
-          </button>
-        )}
+            {RANGE_PRESETS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          {!loading && !isNewAccount && (
+            <button
+              onClick={handleExportCSV}
+              disabled={exporting}
+              className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm"
+            >
+              {exporting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              {exporting ? "Exporting..." : "Export CSV"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Error */}
@@ -241,7 +332,10 @@ const EarningsPage = () => {
       {loading ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="bg-theme-card rounded-lg border border-theme-border p-6 animate-pulse">
+            <div
+              key={i}
+              className="bg-theme-card rounded-lg border border-theme-border p-6 animate-pulse"
+            >
               <div className="h-4 w-24 bg-theme-border rounded mb-3" />
               <div className="h-8 w-20 bg-theme-border rounded" />
             </div>
@@ -290,8 +384,8 @@ const EarningsPage = () => {
         </div>
       )}
 
-      {/* Line Chart */}
-      {!loading && !isNewAccount && chartData.length > 0 && (
+      {/* Time-series chart: weekly bars + 30-day moving average line */}
+      {!loading && !isNewAccount && series.length > 0 && (
         <div className="bg-theme-card rounded-lg border border-theme-border p-4 sm:p-6 shadow-sm">
           <h2 className="text-theme-heading text-lg font-semibold mb-4">
             Earnings Over Time
@@ -299,9 +393,9 @@ const EarningsPage = () => {
           <div className="overflow-x-auto -mx-4 sm:mx-0">
             <div className="min-w-[500px] px-4 sm:px-0">
               <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={chartData}>
+                <ComposedChart data={series}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
+                  <XAxis dataKey="label" />
                   <YAxis />
                   <Tooltip
                     formatter={(value) => formatCurrency(Number(value))}
@@ -312,19 +406,60 @@ const EarningsPage = () => {
                       color: "#f1f5f9",
                     }}
                   />
+                  <Legend />
+                  <Bar
+                    dataKey="earnings"
+                    name="Weekly earnings"
+                    fill="#10b981"
+                    radius={[4, 4, 0, 0]}
+                  />
                   <Line
                     type="monotone"
-                    dataKey="earnings"
-                    stroke="#10b981"
-                    name="Earnings"
+                    dataKey="movingAvg"
+                    name="30-day moving avg"
+                    stroke="#6366f1"
                     strokeWidth={2}
-                    dot={{ r: 4 }}
+                    dot={false}
                   />
-                </LineChart>
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Category breakdown (derived from job category tags) */}
+      {!loading && !isNewAccount && categories.length > 0 && (
+        <div className="bg-theme-card rounded-lg border border-theme-border p-4 sm:p-6 shadow-sm">
+          <h2 className="text-theme-heading text-lg font-semibold mb-4">
+            By Category
+          </h2>
+          <div className="space-y-3">
+            {categories.map((c) => (
+              <div key={c.category}>
+                <div className="flex items-center justify-between text-sm mb-1">
+                  <span className="text-theme-heading font-medium">
+                    {c.category}
+                  </span>
+                  <span className="text-theme-text">
+                    {formatCurrency(c.earnings)} ({c.percentage.toFixed(0)}%)
+                  </span>
+                </div>
+                <div className="h-2 w-full bg-theme-bg-secondary rounded">
+                  <div
+                    className="h-2 rounded bg-stellar-blue"
+                    style={{ width: `${Math.min(100, c.percentage)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Reconciliation panel */}
+      {!loading && !isNewAccount && (
+        <ReconciliationPanel reconcile={reconcile} loading={reconciling} />
       )}
 
       {/* Transaction Table */}
@@ -412,7 +547,9 @@ const EarningsPage = () => {
                     Previous
                   </button>
                   <button
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    onClick={() =>
+                      setCurrentPage((p) => Math.min(totalPages, p + 1))
+                    }
                     disabled={currentPage === totalPages}
                     className="btn-secondary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -421,6 +558,128 @@ const EarningsPage = () => {
                 </div>
               </div>
             </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface ReconciliationPanelProps {
+  reconcile: ReconcileResponse | null;
+  loading: boolean;
+}
+
+const ReconciliationPanel = ({ reconcile, loading }: ReconciliationPanelProps) => {
+  const [showUnmatched, setShowUnmatched] = useState(false);
+
+  if (loading) {
+    return (
+      <div className="bg-theme-card rounded-lg border border-theme-border p-4 sm:p-6 shadow-sm flex items-center gap-2 text-theme-text text-sm">
+        <Loader2 className="w-4 h-4 animate-spin" /> Reconciling with the Stellar
+        ledger…
+      </div>
+    );
+  }
+
+  if (!reconcile) {
+    return (
+      <div className="bg-theme-card rounded-lg border border-theme-border p-4 sm:p-6 shadow-sm text-sm text-theme-text">
+        Reconciliation is currently unavailable. Earnings shown reflect the
+        platform database only.
+      </div>
+    );
+  }
+
+  const { summary, onChainOnly } = reconcile;
+
+  return (
+    <div className="bg-theme-card rounded-lg border border-theme-border p-4 sm:p-6 shadow-sm space-y-4">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-theme-heading text-lg font-semibold">
+          Reconciliation
+        </h2>
+        {summary.allMatched ? (
+          <span className="flex items-center gap-1.5 text-sm text-theme-success">
+            <CheckCircle2 className="w-4 h-4" /> All matched
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-sm text-theme-warning">
+            <AlertTriangle className="w-4 h-4" />{" "}
+            {summary.onChainOnlyCount + summary.dbOnlyCount} unmatched
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-4 text-center">
+        <div>
+          <p className="text-2xl font-bold text-theme-heading">
+            {summary.onChainCount}
+          </p>
+          <p className="text-xs text-theme-text uppercase tracking-wider">
+            On-chain txs
+          </p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-theme-heading">
+            {summary.dbCount}
+          </p>
+          <p className="text-xs text-theme-text uppercase tracking-wider">
+            DB records
+          </p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-theme-heading">
+            {summary.onChainOnlyCount + summary.dbOnlyCount}
+          </p>
+          <p className="text-xs text-theme-text uppercase tracking-wider">Gaps</p>
+        </div>
+      </div>
+
+      {/* Warning banner for on-chain payments missing from the DB */}
+      {summary.onChainOnlyCount > 0 && (
+        <div className="bg-theme-warning/10 border border-theme-warning/30 rounded-lg p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-theme-warning flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-theme-warning">
+                {summary.onChainOnlyCount} on-chain payment
+                {summary.onChainOnlyCount > 1 ? "s were" : " was"} found on the
+                Stellar ledger but {summary.onChainOnlyCount > 1 ? "are" : "is"}{" "}
+                missing from your earnings records.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowUnmatched((s) => !s)}
+              className="btn-secondary px-3 py-1.5 text-xs whitespace-nowrap"
+            >
+              {showUnmatched ? "Hide" : "View unmatched"}
+            </button>
+          </div>
+
+          {showUnmatched && (
+            <ul className="space-y-2">
+              {onChainOnly.map((p) => (
+                <li
+                  key={p.txHash}
+                  className="flex items-center justify-between gap-3 text-sm bg-theme-bg-secondary rounded p-2"
+                >
+                  <span className="text-theme-text">
+                    {new Date(p.createdAt).toLocaleDateString()} ·{" "}
+                    {p.amount.toLocaleString()} {p.assetCode}
+                    {p.memoJobId ? ` · job ${p.memoJobId}` : ""}
+                  </span>
+                  <a
+                    href={p.horizonUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-stellar-blue hover:underline"
+                  >
+                    View tx <ExternalLink className="w-3 h-3" />
+                  </a>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

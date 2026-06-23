@@ -37,7 +37,11 @@ jest.mock("../../services/contract.service", () => ({
     buildFundJobTx: jest.fn(),
     buildApproveMilestoneTx: jest.fn(),
     verifyTransaction: jest.fn(),
+    simulateFundJob: jest.fn().mockResolvedValue({ ok: true }),
+    getRateSnapshot: jest.fn(),
+    getEscrowTtl: jest.fn(),
   },
+  ContractSimulationError: class ContractSimulationError extends Error {},
 }));
 
 jest.mock("../../services/notification.service", () => ({
@@ -117,5 +121,49 @@ describe("POST /api/escrow/init-create", () => {
       error: "Job must have at least one milestone before initializing escrow.",
     });
     expect(buildCreateJobTxMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/escrow/:jobId/ttl", () => {
+  it("returns 404 if the job or contractJobId is missing", async () => {
+    jobMock.findUnique.mockResolvedValueOnce(null);
+
+    const res = await request(app)
+      .get(`/api/escrow/${JOB_ID}/ttl`)
+      .set(authHeader());
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Job or escrow not found." });
+  });
+
+  it("returns 404 if the escrow is not found on-chain", async () => {
+    jobMock.findUnique.mockResolvedValueOnce({
+      id: JOB_ID,
+      contractJobId: "1",
+    });
+    (ContractService.getEscrowTtl as jest.Mock).mockResolvedValueOnce(null);
+
+    const res = await request(app)
+      .get(`/api/escrow/${JOB_ID}/ttl`)
+      .set(authHeader());
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Escrow not found on-chain." });
+  });
+
+  it("returns the ttl details when found on-chain", async () => {
+    jobMock.findUnique.mockResolvedValueOnce({
+      id: JOB_ID,
+      contractJobId: "1",
+    });
+    const ttlData = { currentLedger: 100, expiryLedger: 2000, daysRemaining: 1.1 };
+    (ContractService.getEscrowTtl as jest.Mock).mockResolvedValueOnce(ttlData);
+
+    const res = await request(app)
+      .get(`/api/escrow/${JOB_ID}/ttl`)
+      .set(authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(ttlData);
   });
 });
