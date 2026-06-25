@@ -281,22 +281,19 @@ fn test_dispute_resolved_for_freelancer() {
         &dispute_id_val,
         &voter1,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Work looks good to me"),
-    );
+        &String::from_str(&env, "Work looks good to me"), &0);
 
     dispute_client.cast_vote(
         &dispute_id_val,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Freelancer delivered as promised"),
-    );
+        &String::from_str(&env, "Freelancer delivered as promised"), &0);
 
     dispute_client.cast_vote(
         &dispute_id_val,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "Some issues with quality"),
-    );
+        &String::from_str(&env, "Some issues with quality"), &0);
 
     let dispute = dispute_client.get_dispute(&dispute_id_val);
     assert_eq!(dispute.votes_for_freelancer, 2);
@@ -388,22 +385,19 @@ fn test_dispute_resolved_for_client() {
         &dispute_id_val,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "Work incomplete"),
-    );
+        &String::from_str(&env, "Work incomplete"), &0);
 
     dispute_client.cast_vote(
         &dispute_id_val,
         &voter2,
         &VoteChoice::Client,
-        &String::from_str(&env, "Client is right"),
-    );
+        &String::from_str(&env, "Client is right"), &0);
 
     dispute_client.cast_vote(
         &dispute_id_val,
         &voter3,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Looks ok to me"),
-    );
+        &String::from_str(&env, "Looks ok to me"), &0);
 
     // First resolution — not final yet (max_appeals=2, appeal_count=0).
     // Resolution is final in reputation-based voting (no appeals)
@@ -464,7 +458,7 @@ fn test_full_workflow_with_partial_completion_and_cancellation() {
     assert_eq!(token.balance(&freelancer), 100_001_000);
 
     // Client cancels job (refunds remaining 3500)
-    escrow_client.cancel_job(&job_id, &client);
+    escrow_client.cancel_job(&job_id, &client, &0);
 
     let job = escrow_client.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Cancelled);
@@ -632,20 +626,17 @@ fn test_dispute_with_all_milestones_approved() {
         &dispute_id_val,
         &voter1,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Vote 1"),
-    );
+        &String::from_str(&env, "Vote 1"), &0);
     dispute_client.cast_vote(
         &dispute_id_val,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Vote 2"),
-    );
+        &String::from_str(&env, "Vote 2"), &0);
     dispute_client.cast_vote(
         &dispute_id_val,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote 3"),
-    );
+        &String::from_str(&env, "Vote 3"), &0);
 
     // Resolution is final in reputation-based voting (no appeals)
     let result = dispute_client.resolve_dispute(&dispute_id_val);

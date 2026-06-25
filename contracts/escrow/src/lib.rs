@@ -81,6 +81,12 @@ pub enum EscrowError {
     OracleUnavailable = 42,
     /// An arithmetic overflow occurred while computing the deposited value.
     ValueOverflow = 43,
+    /// A milestone amount is invalid (zero or negative).
+    InvalidMilestone = 44,
+    /// Slippage check failed: token value at release time is below the minimum.
+    SlippageExceeded = 45,
+    /// A replayed nonce was detected within the TTL window.
+    NonceReplay = 46,
 }
 
 /// Privileged actions that can be proposed and approved through the multi-sig flow.
@@ -322,6 +328,8 @@ enum DataKey {
     PriceOracle,
     /// Stored RateSnapshot from the parity check performed at funding time.
     RateSnapshot(u64),
+    /// Per-caller nonce to prevent replay attacks within the TTL window.
+    Nonce(Address, Symbol, u64),
 }
 
 /// Fixed-point scale for oracle prices: prices are quoted in XLM stroops per token
@@ -341,8 +349,20 @@ const INACTIVITY_GRACE_SECS: u64 = 3 * 24 * 3600;
 const MULTISIG_TIME_LOCK_SECS: u64 = 48 * 60 * 60;
 const PROPOSAL_TTL: u64 = 7 * 24 * 60 * 60;
 
+const NONCE_EXPIRY_LEDGERS: u32 = 3;
+
 fn get_job_key(job_id: u64) -> DataKey {
     DataKey::Job(job_id)
+}
+
+fn consume_nonce(env: &Env, caller: &Address, function: &Symbol, nonce: u64) -> Result<(), EscrowError> {
+    let key = DataKey::Nonce(caller.clone(), function.clone(), nonce);
+    if env.storage().temporary().has(&key) {
+        return Err(EscrowError::NonceReplay);
+    }
+    env.storage().temporary().set(&key, &true);
+    env.storage().temporary().extend_ttl(&key, NONCE_EXPIRY_LEDGERS, NONCE_EXPIRY_LEDGERS);
+    Ok(())
 }
 
 fn require_not_paused(env: &Env) -> Result<(), EscrowError> {
@@ -1132,6 +1152,9 @@ impl EscrowContract {
 
         for (i, m) in milestones.iter().enumerate() {
             let (desc, amount, deadline) = m;
+            if amount <= 0 {
+                return Err(EscrowError::InvalidMilestone);
+            }
             if deadline <= env.ledger().timestamp() {
                 return Err(EscrowError::InvalidDeadline);
             }
@@ -1139,6 +1162,9 @@ impl EscrowContract {
                 return Err(EscrowError::InvalidDeadline);
             }
             total += amount;
+            if total > i128::MAX / 2 {
+                return Err(EscrowError::InvalidMilestone);
+            }
             milestone_vec.push_back(Milestone {
                 id: i as u32,
                 description: desc,
@@ -1982,7 +2008,9 @@ impl EscrowContract {
         milestone_index: u32,
         amount: i128,
         client: Address,
+        nonce: u64,
     ) -> Result<(), EscrowError> {
+        consume_nonce(&env, &client, &Symbol::new(&env, "partial_pmt"), nonce)?;
         bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
@@ -2110,7 +2138,10 @@ impl EscrowContract {
         job_id: u64,
         milestone_index: u32,
         client: Address,
+        min_release_value_stroops: i128,
+        nonce: u64,
     ) -> Result<(), EscrowError> {
+        consume_nonce(&env, &client, &Symbol::new(&env, "release_ms"), nonce)?;
         bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
@@ -2136,6 +2167,38 @@ impl EscrowContract {
 
         if milestone.status != MilestoneStatus::Submitted {
             return Err(EscrowError::InvalidStatus);
+        }
+
+        if min_release_value_stroops > 0 {
+            let oracle_addr: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::PriceOracle)
+                .ok_or(EscrowError::OracleUnavailable)?;
+
+            let twap: i128 = env.invoke_contract(
+                &oracle_addr,
+                &Symbol::new(&env, "twap"),
+                soroban_sdk::vec![
+                    &env,
+                    job.token.clone().into_val(&env),
+                    TWAP_SAMPLE_LEDGERS.into_val(&env),
+                ],
+            );
+
+            if twap <= 0 {
+                return Err(EscrowError::OracleUnavailable);
+            }
+
+            let current_value = milestone
+                .amount
+                .checked_mul(twap)
+                .ok_or(EscrowError::ValueOverflow)?
+                / PRICE_SCALE;
+
+            if current_value < min_release_value_stroops {
+                return Err(EscrowError::SlippageExceeded);
+            }
         }
 
         // Compute fee and net freelancer amount.
@@ -2234,7 +2297,8 @@ impl EscrowContract {
     ///                         `Cancelled`, `Created`, or `InProgress`).
     /// * `WorkInProgress`    — at least one milestone is `InProgress` or `Submitted`;
     ///                         the client must open a dispute instead.
-    pub fn cancel_job(env: Env, job_id: u64, client: Address) -> Result<(), EscrowError> {
+    pub fn cancel_job(env: Env, job_id: u64, client: Address, nonce: u64) -> Result<(), EscrowError> {
+        consume_nonce(&env, &client, &Symbol::new(&env, "cancel_job"), nonce)?;
         bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
@@ -2294,7 +2358,8 @@ impl EscrowContract {
     /// Claim a refund for an abandoned job past the deadline + grace period.
     /// Only the client can call this. Refund excludes amounts for already-approved milestones.
     /// Fails if the freelancer has a pending (submitted) milestone awaiting approval.
-    pub fn claim_refund(env: Env, job_id: u64, client: Address) -> Result<(), EscrowError> {
+    pub fn claim_refund(env: Env, job_id: u64, client: Address, nonce: u64) -> Result<(), EscrowError> {
+        consume_nonce(&env, &client, &Symbol::new(&env, "claim_ref"), nonce)?;
         bump_escrow_ttl(&env, job_id);
         client.require_auth();
         require_not_paused(&env)?;
@@ -2378,7 +2443,9 @@ impl EscrowContract {
         caller: Address,
         job_id: u64,
         amount: i128,
+        nonce: u64,
     ) -> Result<(), EscrowError> {
+        consume_nonce(&env, &caller, &Symbol::new(&env, "partial_ref"), nonce)?;
         bump_escrow_ttl(&env, job_id);
         caller.require_auth();
         require_not_paused(&env)?;

@@ -44,6 +44,7 @@ pub enum DisputeError {
     AppealWindowExpired = 19,
     AlreadyAppealed = 20,
     AppealNotFound = 21,
+    NonceReplay = 22,
 }
 
 #[contracttype]
@@ -235,6 +236,10 @@ enum DataKey {
     AppealVotes(u64),
     /// Tracks whether a voter has already voted on a given appeal.
     HasVotedAppeal(u64, Address),
+    /// Per-caller nonce to prevent replay attacks within the TTL window.
+    Nonce(Address, Symbol, u64),
+    /// Stores the resolved split ratio for audit when a tie produces a 50/50 split.
+    SplitRatio(u64),
 }
 
 fn require_not_paused(env: &Env) -> Result<(), DisputeError> {
@@ -279,8 +284,20 @@ const APPEAL_WINDOW_SECS: u64 = 172_800; // 48 hours
 /// Minimum votes required to resolve an appeal.
 const APPEAL_MIN_VOTES: u32 = 3;
 
+const NONCE_EXPIRY_LEDGERS: u32 = 3;
+
 const MIN_TTL_THRESHOLD: u32 = 1_000;
 const MIN_TTL_EXTEND_TO: u32 = 10_000;
+
+fn consume_nonce(env: &Env, caller: &Address, function: &Symbol, nonce: u64) -> Result<(), DisputeError> {
+    let key = DataKey::Nonce(caller.clone(), function.clone(), nonce);
+    if env.storage().temporary().has(&key) {
+        return Err(DisputeError::NonceReplay);
+    }
+    env.storage().temporary().set(&key, &true);
+    env.storage().temporary().extend_ttl(&key, NONCE_EXPIRY_LEDGERS, NONCE_EXPIRY_LEDGERS);
+    Ok(())
+}
 
 fn bump_dispute_ttl(env: &Env, dispute_id: u64) {
     env.storage().persistent().extend_ttl(
@@ -934,7 +951,9 @@ impl DisputeContract {
         voter: Address,
         choice: VoteChoice,
         reason: String,
+        nonce: u64,
     ) -> Result<(), DisputeError> {
+        consume_nonce(&env, &voter, &Symbol::new(&env, "cast_vote"), nonce)?;
         voter.require_auth();
         require_not_paused(&env)?;
 
@@ -2048,6 +2067,16 @@ fn internal_resolve(
     {
         let avg = dispute.refund_split_sum / dispute.votes_for_refund_split as u64;
         dispute.status = DisputeStatus::RefundSplit(avg as u32);
+    } else if dispute.tally.client_weight > 0
+        && dispute.tally.client_weight == dispute.tally.freelancer_weight
+    {
+        // Exact tie between client and freelancer — resolve as 50/50 split.
+        dispute.status = DisputeStatus::RefundSplit(50);
+
+        env.storage().persistent().set(
+            &DataKey::SplitRatio(dispute_id),
+            &(50u32, 50u32),
+        );
     } else {
         // Tie-break logic (applies if votes are tied OR if total_votes is 0 in force mode)
         match dispute.tie_break_method {

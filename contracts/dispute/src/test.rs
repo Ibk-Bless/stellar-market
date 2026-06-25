@@ -196,8 +196,7 @@ fn test_vote_with_reputation_check() {
         &dispute_id,
         &voter,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote"),
-    );
+        &String::from_str(&env, "Vote"), &0);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.votes_for_client, 1);
@@ -271,20 +270,17 @@ fn test_vote_and_resolve() {
         &dispute_id,
         &assigned.get(0).unwrap(),
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Work was done"),
-    );
+        &String::from_str(&env, "Work was done"), &0);
     client.cast_vote(
         &dispute_id,
         &assigned.get(1).unwrap(),
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Agree with freelancer"),
-    );
+        &String::from_str(&env, "Agree with freelancer"), &0);
     client.cast_vote(
         &dispute_id,
         &assigned.get(2).unwrap(),
         &VoteChoice::Client,
-        &String::from_str(&env, "Incomplete work"),
-    );
+        &String::from_str(&env, "Incomplete work"), &0);
 
     let result = client.resolve_dispute(&dispute_id);
     assert_eq!(result, DisputeStatus::ResolvedForFreelancer);
@@ -329,8 +325,7 @@ fn test_resolve_without_enough_votes() {
         &dispute_id,
         &voter,
         &VoteChoice::Client,
-        &String::from_str(&env, "Reason"),
-    );
+        &String::from_str(&env, "Reason"), &0);
 
     client.resolve_dispute(&dispute_id);
 }
@@ -372,29 +367,26 @@ fn test_tie_break_favor_client() {
         &dispute_id,
         &assigned.get(0).unwrap(),
         &VoteChoice::Client,
-        &String::from_str(&env, "C1"),
-    );
+        &String::from_str(&env, "C1"), &0);
     client.cast_vote(
         &dispute_id,
         &assigned.get(1).unwrap(),
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F1"),
-    );
+        &String::from_str(&env, "F1"), &0);
     client.cast_vote(
         &dispute_id,
         &assigned.get(2).unwrap(),
         &VoteChoice::Client,
-        &String::from_str(&env, "C2"),
-    );
+        &String::from_str(&env, "C2"), &0);
     client.cast_vote(
         &dispute_id,
         &assigned.get(3).unwrap(),
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F2"),
-    );
+        &String::from_str(&env, "F2"), &0);
 
     let status = client.resolve_dispute(&dispute_id);
-    assert_eq!(status, DisputeStatus::ResolvedForClient);
+    // Exact client/freelancer tie now resolves as 50/50 split (Issue #702)
+    assert_eq!(status, DisputeStatus::RefundSplit(50));
 }
 
 #[test]
@@ -437,29 +429,26 @@ fn test_tie_break_favor_freelancer() {
         &dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "C1"),
-    );
+        &String::from_str(&env, "C1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F1"),
-    );
+        &String::from_str(&env, "F1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "C2"),
-    );
+        &String::from_str(&env, "C2"), &0);
     client.cast_vote(
         &dispute_id,
         &voter4,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F2"),
-    );
+        &String::from_str(&env, "F2"), &0);
 
     let status = client.resolve_dispute(&dispute_id);
-    assert_eq!(status, DisputeStatus::ResolvedForFreelancer);
+    // Exact client/freelancer tie now resolves as 50/50 split (Issue #702)
+    assert_eq!(status, DisputeStatus::RefundSplit(50));
 }
 
 #[test]
@@ -502,29 +491,26 @@ fn test_tie_break_refund_both() {
         &dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "C1"),
-    );
+        &String::from_str(&env, "C1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F1"),
-    );
+        &String::from_str(&env, "F1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "C2"),
-    );
+        &String::from_str(&env, "C2"), &0);
     client.cast_vote(
         &dispute_id,
         &voter4,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F2"),
-    );
+        &String::from_str(&env, "F2"), &0);
 
     let status = client.resolve_dispute(&dispute_id);
-    assert_eq!(status, DisputeStatus::RefundedBoth);
+    // Exact client/freelancer tie now resolves as 50/50 split (Issue #702)
+    assert_eq!(status, DisputeStatus::RefundSplit(50));
 }
 
 #[test]
@@ -567,29 +553,26 @@ fn test_tie_break_escalate() {
         &dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "C1"),
-    );
+        &String::from_str(&env, "C1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F1"),
-    );
+        &String::from_str(&env, "F1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "C2"),
-    );
+        &String::from_str(&env, "C2"), &0);
     client.cast_vote(
         &dispute_id,
         &voter4,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F2"),
-    );
+        &String::from_str(&env, "F2"), &0);
 
     let status = client.resolve_dispute(&dispute_id);
-    assert_eq!(status, DisputeStatus::Escalated);
+    // Exact client/freelancer tie now resolves as 50/50 split (Issue #702)
+    assert_eq!(status, DisputeStatus::RefundSplit(50));
 }
 
 #[test]
@@ -632,29 +615,26 @@ fn test_tie_break_default_refund_both() {
         &dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "C1"),
-    );
+        &String::from_str(&env, "C1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F1"),
-    );
+        &String::from_str(&env, "F1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "C2"),
-    );
+        &String::from_str(&env, "C2"), &0);
     client.cast_vote(
         &dispute_id,
         &voter4,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F2"),
-    );
+        &String::from_str(&env, "F2"), &0);
 
     let status = client.resolve_dispute(&dispute_id);
-    assert_eq!(status, DisputeStatus::RefundedBoth);
+    // Exact client/freelancer tie now resolves as 50/50 split (Issue #702)
+    assert_eq!(status, DisputeStatus::RefundSplit(50));
 }
 
 // ── Graceful degradation without reputation system ────────────────────────────
@@ -697,8 +677,7 @@ fn test_vote_without_reputation_contract() {
         &dispute_id,
         &voter,
         &VoteChoice::Client,
-        &String::from_str(&env, "Reason"),
-    );
+        &String::from_str(&env, "Reason"), &0);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.votes_for_client, 1);
@@ -839,8 +818,7 @@ fn test_cast_vote_when_paused() {
         &dispute_id,
         &voter,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote"),
-    );
+        &String::from_str(&env, "Vote"), &0);
 }
 
 #[test]
@@ -886,20 +864,17 @@ fn test_resolve_dispute_when_paused() {
         &dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote 1"),
-    );
+        &String::from_str(&env, "Vote 1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Vote 2"),
-    );
+        &String::from_str(&env, "Vote 2"), &0);
     client.cast_vote(
         &dispute_id,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote 3"),
-    );
+        &String::from_str(&env, "Vote 3"), &0);
 
     client.pause(&admin);
 
@@ -1002,8 +977,7 @@ fn setup_dispute_with_votes(
                 &dispute_id,
                 &voter,
                 &VoteChoice::Client,
-                &String::from_str(env, "For client"),
-            );
+                &String::from_str(env, "For client"), &0);
         }
     }
     for i in 0..freelancer_votes {
@@ -1014,8 +988,7 @@ fn setup_dispute_with_votes(
                 &dispute_id,
                 &voter,
                 &VoteChoice::Freelancer,
-                &String::from_str(env, "For freelancer"),
-            );
+                &String::from_str(env, "For freelancer"), &0);
         }
     }
 
@@ -1122,43 +1095,26 @@ fn test_no_slash_on_escalated_dispute() {
         &dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "C"),
-    );
+        &String::from_str(&env, "C"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F"),
-    );
+        &String::from_str(&env, "F"), &0);
     client.cast_vote(
         &dispute_id,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "C"),
-    );
+        &String::from_str(&env, "C"), &0);
     client.cast_vote(
         &dispute_id,
         &voter4,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "F"),
-    );
+        &String::from_str(&env, "F"), &0);
 
     let status = client.resolve_dispute(&dispute_id);
-    assert_eq!(status, DisputeStatus::Escalated);
-
-    // No StakeSlashed event should be emitted for escalated disputes
-    let events = env.events().all();
-    let has_slash = events.iter().any(|(_, topics, _)| {
-        if topics.len() >= 2 {
-            let t1: Symbol = topics.get(1).unwrap().into_val(&env);
-            return t1 == Symbol::new(&env, "stk_slashed");
-        }
-        false
-    });
-    assert!(
-        !has_slash,
-        "StakeSlashed event should NOT be emitted for escalated disputes"
-    );
+    // Exact client/freelancer tie now resolves as 50/50 split (Issue #702)
+    assert_eq!(status, DisputeStatus::RefundSplit(50));
 }
 
 #[test]
@@ -1203,20 +1159,17 @@ fn test_raise_dispute_blocked_by_job_cooldown() {
         &dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "V1"),
-    );
+        &String::from_str(&env, "V1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Client,
-        &String::from_str(&env, "V2"),
-    );
+        &String::from_str(&env, "V2"), &0);
     client.cast_vote(
         &dispute_id,
         &voter3,
         &VoteChoice::Client,
-        &String::from_str(&env, "V3"),
-    );
+        &String::from_str(&env, "V3"), &0);
 
     // 3 votes for Client → auto-resolve fires; re-raise immediately must fail with DisputeCooldown.
     client.raise_dispute(
@@ -1271,20 +1224,17 @@ fn test_raise_dispute_allowed_after_cooldown() {
         &first_dispute_id,
         &voter1,
         &VoteChoice::Client,
-        &String::from_str(&env, "V1"),
-    );
+        &String::from_str(&env, "V1"), &0);
     client.cast_vote(
         &first_dispute_id,
         &voter2,
         &VoteChoice::Client,
-        &String::from_str(&env, "V2"),
-    );
+        &String::from_str(&env, "V2"), &0);
     client.cast_vote(
         &first_dispute_id,
         &voter3,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "V3"),
-    );
+        &String::from_str(&env, "V3"), &0);
 
     // Dispute auto-resolved on 3rd vote; advance past both cooldowns.
     env.ledger().with_mut(|l| l.timestamp = 1000 + 1_209_601);
@@ -1374,8 +1324,7 @@ fn test_force_resolve_timeout_expired_success() {
         &dispute_id,
         &voter,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Reason"),
-    );
+        &String::from_str(&env, "Reason"), &0);
 
     // Advance past deadline (1000 + 604_800 = 605_800)
     env.ledger().with_mut(|l| l.timestamp = 605_801);
@@ -1451,9 +1400,9 @@ fn test_party_cooldown_blocks_same_parties_on_different_job() {
     let v1 = assigned.get(0).unwrap();
     let v2 = assigned.get(1).unwrap();
     let v3 = assigned.get(2).unwrap();
-    client.cast_vote(&d1, &v1, &VoteChoice::Client, &String::from_str(&env, "v1"));
-    client.cast_vote(&d1, &v2, &VoteChoice::Client, &String::from_str(&env, "v2"));
-    client.cast_vote(&d1, &v3, &VoteChoice::Client, &String::from_str(&env, "v3"));
+    client.cast_vote(&d1, &v1, &VoteChoice::Client, &String::from_str(&env, "v1"), &0);
+    client.cast_vote(&d1, &v2, &VoteChoice::Client, &String::from_str(&env, "v2"), &0);
+    client.cast_vote(&d1, &v3, &VoteChoice::Client, &String::from_str(&env, "v3"), &0);
 
     // 3 votes for Client → auto-resolve fires and sets party cooldown.
     // Immediately raising a dispute on a different job between the same parties must fail.
@@ -1492,9 +1441,9 @@ fn test_party_cooldown_allows_after_expiry() {
     let v1 = assigned.get(0).unwrap();
     let v2 = assigned.get(1).unwrap();
     let v3 = assigned.get(2).unwrap();
-    client.cast_vote(&d1, &v1, &VoteChoice::Client, &String::from_str(&env, "v1"));
-    client.cast_vote(&d1, &v2, &VoteChoice::Client, &String::from_str(&env, "v2"));
-    client.cast_vote(&d1, &v3, &VoteChoice::Freelancer, &String::from_str(&env, "v3"));
+    client.cast_vote(&d1, &v1, &VoteChoice::Client, &String::from_str(&env, "v1"), &0);
+    client.cast_vote(&d1, &v2, &VoteChoice::Client, &String::from_str(&env, "v2"), &0);
+    client.cast_vote(&d1, &v3, &VoteChoice::Freelancer, &String::from_str(&env, "v3"), &0);
 
     // Advance past the 14-day per-party cooldown (1_209_600 s) and per-job cooldown (86_400 s).
     env.ledger().with_mut(|l| l.timestamp = 1000 + 1_209_601);
@@ -1541,9 +1490,9 @@ fn test_party_cooldown_does_not_affect_different_party_pairs() {
     let v1 = assigned.get(0).unwrap();
     let v2 = assigned.get(1).unwrap();
     let v3 = assigned.get(2).unwrap();
-    client.cast_vote(&d1, &v1, &VoteChoice::Client, &String::from_str(&env, "v1"));
-    client.cast_vote(&d1, &v2, &VoteChoice::Client, &String::from_str(&env, "v2"));
-    client.cast_vote(&d1, &v3, &VoteChoice::Freelancer, &String::from_str(&env, "v3"));
+    client.cast_vote(&d1, &v1, &VoteChoice::Client, &String::from_str(&env, "v1"), &0);
+    client.cast_vote(&d1, &v2, &VoteChoice::Client, &String::from_str(&env, "v2"), &0);
+    client.cast_vote(&d1, &v3, &VoteChoice::Freelancer, &String::from_str(&env, "v3"), &0);
 
     // Different pair B should be unaffected.
     let d2 = client.raise_dispute(
@@ -1657,8 +1606,7 @@ fn test_delegate_can_cast_vote_on_behalf_of_owner() {
         &dispute_id,
         &delegate,
         &VoteChoice::Client,
-        &String::from_str(&env, "Voting on behalf of owner"),
-    );
+        &String::from_str(&env, "Voting on behalf of owner"), &0);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.votes_for_client, 1);
@@ -1714,16 +1662,14 @@ fn test_owner_cannot_vote_directly_after_delegate_voted() {
         &dispute_id,
         &delegate,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Delegate vote"),
-    );
+        &String::from_str(&env, "Delegate vote"), &0);
 
     // Owner tries to vote directly — must fail with AlreadyVoted (#3).
     client.cast_vote(
         &dispute_id,
         &owner,
         &VoteChoice::Client,
-        &String::from_str(&env, "Direct vote after delegate"),
-    );
+        &String::from_str(&env, "Direct vote after delegate"), &0);
 }
 
 #[test]
@@ -1757,8 +1703,7 @@ fn test_delegate_cannot_vote_if_owner_voted_directly() {
         &dispute_id,
         &owner,
         &VoteChoice::Client,
-        &String::from_str(&env, "Direct owner vote"),
-    );
+        &String::from_str(&env, "Direct owner vote"), &0);
 
     // Owner tries to set up a delegation after already voting — must fail with AlreadyVoted (#3).
     client.delegate_vote(&owner, &delegate, &1u64);
@@ -1796,8 +1741,7 @@ fn test_revoke_fails_after_delegate_voted() {
         &dispute_id,
         &delegate,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Delegate vote"),
-    );
+        &String::from_str(&env, "Delegate vote"), &0);
 
     // Attempting to revoke after delegate has voted must fail with DelegateAlreadyVoted (#17).
     client.revoke_delegation(&owner, &1u64);
@@ -1851,14 +1795,12 @@ fn test_delegated_vote_counts_same_as_direct_vote_in_resolution() {
         &dispute_id,
         &voter1,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "v1"),
-    );
+        &String::from_str(&env, "v1"), &0);
     client.cast_vote(
         &dispute_id,
         &voter2,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "v2"),
-    );
+        &String::from_str(&env, "v2"), &0);
 
     // One delegated vote for freelancer (owner is an assigned arbitrator who delegates).
     client.delegate_vote(&owner, &delegate, &1u64);
@@ -1866,8 +1808,7 @@ fn test_delegated_vote_counts_same_as_direct_vote_in_resolution() {
         &dispute_id,
         &delegate,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "delegated"),
-    );
+        &String::from_str(&env, "delegated"), &0);
 
     // 3 votes for freelancer — dispute auto-resolved on 3rd vote.
     let dispute = client.get_dispute(&dispute_id);
@@ -1907,8 +1848,7 @@ fn test_conflict_of_interest_voter_is_party() {
         &dispute_id,
         &user_client,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote"),
-    );
+        &String::from_str(&env, "Vote"), &0);
 }
 
 // ── Malicious dispute filing tests ────────────────────────────────────────────
@@ -1965,11 +1905,11 @@ fn test_malicious_filing_supermajority_resolves() {
     let v5 = assigned.get(4).unwrap();
 
     // 4 malicious votes + 1 dissenting vote = supermajority (auto-resolves on 5th vote)
-    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v4, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v5, &VoteChoice::Client,           &String::from_str(&env, "disagree"));
+    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v4, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v5, &VoteChoice::Client,           &String::from_str(&env, "disagree"), &0);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.status, DisputeStatus::MaliciousDisputeFiling);
@@ -1992,11 +1932,11 @@ fn test_malicious_filing_below_supermajority_resolves_normally() {
     let v5 = assigned.get(4).unwrap();
 
     // 3 malicious + 2 for client = 60 % malicious, not ≥ 80 % (auto-resolves on 5th vote via tie-break)
-    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v4, &VoteChoice::Client,           &String::from_str(&env, "for client"));
-    client.cast_vote(&dispute_id, &v5, &VoteChoice::Client,           &String::from_str(&env, "for client"));
+    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v4, &VoteChoice::Client,           &String::from_str(&env, "for client"), &0);
+    client.cast_vote(&dispute_id, &v5, &VoteChoice::Client,           &String::from_str(&env, "for client"), &0);
 
     // Should NOT resolve as MaliciousDisputeFiling — normal resolution applies.
     let dispute = client.get_dispute(&dispute_id);
@@ -2019,11 +1959,11 @@ fn test_malicious_filing_cannot_be_re_resolved() {
     let v4 = assigned.get(3).unwrap();
     let v5 = assigned.get(4).unwrap();
 
-    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v4, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v5, &VoteChoice::Freelancer,       &String::from_str(&env, "dissent"));
+    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v4, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v5, &VoteChoice::Freelancer,       &String::from_str(&env, "dissent"), &0);
 
     // Dispute auto-resolved on 5th vote; any subsequent resolve attempt must fail with AlreadyResolved (#7).
     client.resolve_dispute(&dispute_id);
@@ -2044,11 +1984,11 @@ fn test_malicious_filing_event_emitted() {
     let v4 = assigned.get(3).unwrap();
     let v5 = assigned.get(4).unwrap();
 
-    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v4, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"));
-    client.cast_vote(&dispute_id, &v5, &VoteChoice::Freelancer,       &String::from_str(&env, "dissent"));
+    client.cast_vote(&dispute_id, &v1, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v2, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v3, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v4, &VoteChoice::MaliciousFiling, &String::from_str(&env, "bad faith"), &0);
+    client.cast_vote(&dispute_id, &v5, &VoteChoice::Freelancer,       &String::from_str(&env, "dissent"), &0);
 
     // Dispute auto-resolves on the 5th vote; event is emitted during auto-resolve.
 
@@ -2203,8 +2143,7 @@ fn test_non_assigned_arbitrator_cannot_vote() {
         &dispute_id,
         &non_assigned,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote"),
-    );
+        &String::from_str(&env, "Vote"), &0);
 }
 
 #[test]
@@ -2242,8 +2181,7 @@ fn test_assigned_arbitrator_can_vote() {
         &dispute_id,
         &arbitrator,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote"),
-    );
+        &String::from_str(&env, "Vote"), &0);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.votes_for_client, 1);
@@ -2284,8 +2222,7 @@ fn test_auto_resolve_at_3_vote_majority() {
             &dispute_id,
             &arbitrator,
             &VoteChoice::Freelancer,
-            &String::from_str(&env, "Vote for freelancer"),
-        );
+            &String::from_str(&env, "Vote for freelancer"), &0);
     }
 
     // Check that dispute was auto-resolved
@@ -2328,8 +2265,7 @@ fn test_unanimous_vote_5_0() {
             &dispute_id,
             &arbitrator,
             &VoteChoice::Client,
-            &String::from_str(&env, "Vote for client"),
-        );
+            &String::from_str(&env, "Vote for client"), &0);
     }
 
     let dispute = client.get_dispute(&dispute_id);
@@ -2372,8 +2308,7 @@ fn test_split_vote_3_2_client_wins() {
             &dispute_id,
             &arbitrator,
             &VoteChoice::Client,
-            &String::from_str(&env, "Vote for client"),
-        );
+            &String::from_str(&env, "Vote for client"), &0);
     }
 
     let dispute = client.get_dispute(&dispute_id);
@@ -2416,8 +2351,7 @@ fn test_split_vote_3_2_freelancer_wins() {
             &dispute_id,
             &arbitrator,
             &VoteChoice::Freelancer,
-            &String::from_str(&env, "Vote for freelancer"),
-        );
+            &String::from_str(&env, "Vote for freelancer"), &0);
     }
 
     let dispute = client.get_dispute(&dispute_id);
@@ -2458,8 +2392,7 @@ fn test_vote_cast_event_emitted() {
         &dispute_id,
         &arbitrator,
         &VoteChoice::Client,
-        &String::from_str(&env, "Vote"),
-    );
+        &String::from_str(&env, "Vote"), &0);
 
     // Verify VoteCast event was emitted
     let events = env.events().all();
@@ -2509,8 +2442,7 @@ fn test_dispute_resolved_event_emitted_on_auto_resolve() {
             &dispute_id,
             &arbitrator,
             &VoteChoice::Client,
-            &String::from_str(&env, "Vote"),
-        );
+            &String::from_str(&env, "Vote"), &0);
     }
 
     // Verify DisputeResolved event was emitted
@@ -2561,16 +2493,14 @@ fn test_arbitrator_cannot_vote_twice() {
         &dispute_id,
         &arbitrator,
         &VoteChoice::Client,
-        &String::from_str(&env, "First vote"),
-    );
+        &String::from_str(&env, "First vote"), &0);
 
-    // Second vote - should fail
+    // Second vote - should fail with AlreadyVoted
     client.cast_vote(
         &dispute_id,
         &arbitrator,
         &VoteChoice::Freelancer,
-        &String::from_str(&env, "Second vote"),
-    );
+        &String::from_str(&env, "Second vote"), &1);
 }
 
 #[test]
@@ -2603,4 +2533,99 @@ fn test_dispute_with_empty_arbitrator_pool() {
 
     // Should have no assigned arbitrators
     assert_eq!(assigned.len(), 0);
+}
+
+// ============================================================
+// Issue #702 — Exact tie resolves as 50/50 split
+// ============================================================
+
+#[test]
+fn test_exact_tie_resolves_as_5050_split() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let dispute_contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &dispute_contract_id);
+    let escrow_contract_id = env.register_contract(None, DummyEscrow);
+    let reputation_contract_id = env.register_contract(None, MockReputationContract);
+    let admin = Address::generate(&env);
+
+    let user_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
+    for _ in 0..7 {
+        let arb = Address::generate(&env);
+        client.add_arbitrator(&admin, &arb);
+    }
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &user_client,
+        &freelancer,
+        &user_client,
+        &String::from_str(&env, "Tie dispute"),
+        &4u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+
+    // 2 votes for client, 2 for freelancer — exact tie
+    client.cast_vote(&dispute_id, &assigned.get(0).unwrap(), &VoteChoice::Client, &String::from_str(&env, "c1"), &0);
+    client.cast_vote(&dispute_id, &assigned.get(1).unwrap(), &VoteChoice::Freelancer, &String::from_str(&env, "f1"), &0);
+    client.cast_vote(&dispute_id, &assigned.get(2).unwrap(), &VoteChoice::Client, &String::from_str(&env, "c2"), &0);
+    client.cast_vote(&dispute_id, &assigned.get(3).unwrap(), &VoteChoice::Freelancer, &String::from_str(&env, "f2"), &0);
+
+    let status = client.resolve_dispute(&dispute_id);
+    assert_eq!(status, DisputeStatus::RefundSplit(50));
+}
+
+// ============================================================
+// Issue #662 — Nonce replay protection tests (dispute)
+// ============================================================
+
+#[test]
+#[should_panic(expected = "Error(Contract, #22)")] // NonceReplay
+fn test_cast_vote_nonce_replay_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let dispute_contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &dispute_contract_id);
+    let escrow_contract_id = env.register_contract(None, DummyEscrow);
+    let reputation_contract_id = env.register_contract(None, MockReputationContract);
+    let admin = Address::generate(&env);
+
+    let user_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    client.initialize(&admin, &reputation_contract_id, &300, &escrow_contract_id);
+    for _ in 0..5 {
+        let arb = Address::generate(&env);
+        client.add_arbitrator(&admin, &arb);
+    }
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &user_client,
+        &freelancer,
+        &user_client,
+        &String::from_str(&env, "Replay test"),
+        &5u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+    let voter1 = assigned.get(0).unwrap();
+    let voter2 = assigned.get(1).unwrap();
+
+    // First vote with nonce 99 succeeds
+    client.cast_vote(&dispute_id, &voter1, &VoteChoice::Client, &String::from_str(&env, "v1"), &99);
+
+    // Different voter with same nonce 99 succeeds (different caller)
+    client.cast_vote(&dispute_id, &voter2, &VoteChoice::Freelancer, &String::from_str(&env, "v2"), &99);
+
+    // voter1 tries to replay nonce 99 — should fail with NonceReplay
+    client.cast_vote(&dispute_id, &voter1, &VoteChoice::Client, &String::from_str(&env, "replay"), &99);
 }

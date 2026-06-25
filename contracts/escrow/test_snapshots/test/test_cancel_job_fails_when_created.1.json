@@ -369,7 +369,7 @@
             },
             "ext": "v0"
           },
-          518400
+          535000
         ]
       ],
       [
@@ -1203,6 +1203,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "u64": 0
                 }
               ]
             }
@@ -1293,6 +1296,9 @@
                     },
                     {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                    },
+                    {
+                      "u64": 0
                     }
                   ]
                 }

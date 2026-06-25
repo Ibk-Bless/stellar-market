@@ -165,7 +165,7 @@ const EarningsPage = () => {
 
       const response = await axios.get<EarningsResponse>(
         `${API}/freelancers/earnings?${params.toString()}`,
-        { headers: authHeader() }
+        { headers: authHeader() },
       );
 
       setSummary(response.data.summary);
@@ -191,7 +191,7 @@ const EarningsPage = () => {
       const params = new URLSearchParams({ from: range.from, to: range.to });
       const response = await axios.get<ReconcileResponse>(
         `${API}/freelancers/earnings/reconcile?${params.toString()}`,
-        { headers: authHeader() }
+        { headers: authHeader() },
       );
       setReconcile(response.data);
     } catch {
@@ -242,11 +242,12 @@ const EarningsPage = () => {
         ...s,
         label: formatWeek(s.week),
       })),
-    [weeklyEarnings]
+    [weeklyEarnings],
   );
 
   const handleExportCSV = async () => {
     setExporting(true);
+    setError(null);
     try {
       const params = new URLSearchParams({
         from: range.from,
@@ -255,18 +256,34 @@ const EarningsPage = () => {
       });
       const response = await axios.get(
         `${API}/freelancers/earnings/export?${params.toString()}`,
-        { headers: authHeader(), responseType: "blob" }
+        { headers: authHeader(), responseType: "blob" },
       );
 
-      const blob = new Blob([response.data], { type: "text/csv;charset=utf-8;" });
+      const blob = new Blob([response.data], {
+        type: "text/csv;charset=utf-8;",
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `earnings-${range.from.slice(0, 10)}-to-${range.to.slice(0, 10)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      setError("Failed to export CSV.");
+
+      // Show success message
+      setError(null);
+      const successDiv = document.createElement("div");
+      successDiv.className =
+        "fixed bottom-4 right-4 bg-theme-success text-white px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2";
+      successDiv.innerHTML = `
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+        </svg>
+        <span>Export ready — download started</span>
+      `;
+      document.body.appendChild(successDiv);
+      setTimeout(() => successDiv.remove(), 3000);
+    } catch (err) {
+      setError("Export failed. Try again.");
     } finally {
       setExporting(false);
     }
@@ -284,7 +301,8 @@ const EarningsPage = () => {
             Earnings
           </h1>
           <p className="text-theme-text mt-1 text-sm sm:text-base">
-            Track your freelance earnings, reconcile on-chain payments, and export for taxes
+            Track your freelance earnings, reconcile on-chain payments, and
+            export for taxes
           </p>
         </div>
         <div className="flex items-center gap-2 self-start">
@@ -570,14 +588,17 @@ interface ReconciliationPanelProps {
   loading: boolean;
 }
 
-const ReconciliationPanel = ({ reconcile, loading }: ReconciliationPanelProps) => {
+const ReconciliationPanel = ({
+  reconcile,
+  loading,
+}: ReconciliationPanelProps) => {
   const [showUnmatched, setShowUnmatched] = useState(false);
 
   if (loading) {
     return (
       <div className="bg-theme-card rounded-lg border border-theme-border p-4 sm:p-6 shadow-sm flex items-center gap-2 text-theme-text text-sm">
-        <Loader2 className="w-4 h-4 animate-spin" /> Reconciling with the Stellar
-        ledger…
+        <Loader2 className="w-4 h-4 animate-spin" /> Reconciling with the
+        Stellar ledger…
       </div>
     );
   }
@@ -632,7 +653,9 @@ const ReconciliationPanel = ({ reconcile, loading }: ReconciliationPanelProps) =
           <p className="text-2xl font-bold text-theme-heading">
             {summary.onChainOnlyCount + summary.dbOnlyCount}
           </p>
-          <p className="text-xs text-theme-text uppercase tracking-wider">Gaps</p>
+          <p className="text-xs text-theme-text uppercase tracking-wider">
+            Gaps
+          </p>
         </div>
       </div>
 

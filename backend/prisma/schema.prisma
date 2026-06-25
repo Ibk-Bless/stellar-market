@@ -637,16 +637,24 @@ model PushSubscription {
   @@index([userId])
 }
 
-/// Canonical skill taxonomy used to power profile autocomplete and to
-/// normalise free-text skill entries so "React" / "ReactJS" / "react.js"
-/// collapse to a single searchable value.
-model Skill {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  /// Alternate spellings that normalise to `name` (case-insensitive).
-  aliases   String[] @default([])
-  category  String?
-  createdAt DateTime @default(now())
+model HorizonCursor {
+  id        Int      @id @default(1)
+  cursor    String
+  updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@index([name])
+  @@map("horizon_cursor")
+}
+
+model HorizonDlq {
+  id         Int       @id @default(autoincrement())
+  cursor     String
+  payload    Json
+  error      String
+  attempt    Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  replayedAt DateTime? @map("replayed_at")
+
+  @@index([replayedAt])
+  @@index([cursor])
+  @@map("horizon_dlq")
 }

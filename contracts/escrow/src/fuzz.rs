@@ -153,6 +153,7 @@ fn fuzz_partial_payments() {
             .submit_milestone(&job_id, &0, &freelancer);
 
         let mut remaining = milestone_amount;
+        let mut nonce_counter: u64 = 0;
         while remaining > 0 {
             let payment = random_i128(&mut seed, remaining).min(remaining);
             if payment <= 0 {
@@ -160,7 +161,8 @@ fn fuzz_partial_payments() {
             }
 
             contract
-                .release_partial_payment(&job_id, &0, &payment, &client);
+                .release_partial_payment(&job_id, &0, &payment, &client, &nonce_counter);
+            nonce_counter += 1;
 
             remaining -= payment;
 
@@ -273,7 +275,7 @@ fn fuzz_refund_flows() {
         contract.fund_job(&job_id, &client, &0, &0);
 
         if random_bool(&mut seed) {
-            contract.cancel_job(&job_id, &client);
+            contract.cancel_job(&job_id, &client, &0);
 
             let job = contract.get_job(&job_id);
             assert_eq!(job.status, JobStatus::Cancelled);
@@ -326,7 +328,7 @@ fn fuzz_claim_refund_after_expiry() {
 
         env.ledger().with_mut(|l| l.timestamp = job_deadline + grace_period + 1);
 
-        contract.claim_refund(&job_id, &client);
+        contract.claim_refund(&job_id, &client, &0);
 
         let job = contract.get_job(&job_id);
         assert_eq!(job.status, JobStatus::Cancelled);
