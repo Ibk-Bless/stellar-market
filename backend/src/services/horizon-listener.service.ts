@@ -18,6 +18,45 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_EVENTS_PER_POLL = 200;
 const SYNC_STATE_ID = "default";
 
+// ─── Reconnect backoff (independent of the circuit breaker's open/half-open
+// gating below — this controls how soon we *retry* after a failed poll) ──────
+
+const BASE_BACKOFF_MS = 1_000;
+const MAX_BACKOFF_MS = 60_000;
+
+let consecutiveFailures = 0;
+let disconnectedAt: number | null = null;
+
+/** 1s, 2s, 4s, 8s, ... capped at 60s. */
+export function computeReconnectBackoffMs(failures: number): number {
+  if (failures <= 0) return 0;
+  return Math.min(BASE_BACKOFF_MS * 2 ** (failures - 1), MAX_BACKOFF_MS);
+}
+
+function onPollFailure(err: unknown): void {
+  consecutiveFailures += 1;
+
+  if (disconnectedAt === null) {
+    disconnectedAt = Date.now();
+    logger.error(
+      { err, metric: "horizon_listener_disconnected", consecutiveFailures },
+      "[HorizonListener] Disconnected from Horizon",
+    );
+  }
+}
+
+function onPollSuccess(): void {
+  if (disconnectedAt !== null) {
+    const downtimeMs = Date.now() - disconnectedAt;
+    logger.info(
+      { metric: "horizon_listener_reconnected", downtimeMs },
+      "[HorizonListener] Reconnected to Horizon",
+    );
+  }
+  consecutiveFailures = 0;
+  disconnectedAt = null;
+}
+
 // ─── Circuit Breaker instance ─────────────────────────────────────────────────
 
 const horizonCB = new CircuitBreaker({
@@ -388,17 +427,20 @@ async function poll(): Promise<void> {
       await setLastIndexedLedger(startLedger);
       logger.info({ startLedger }, "[HorizonListener] First run — starting from ledger");
       horizonCB.onSuccess();
+      onPollSuccess();
       return;
     }
     startLedger = lastLedger + 1;
 
     if (startLedger > latest.sequence) {
       horizonCB.onSuccess(); // Horizon is reachable, nothing new
+      onPollSuccess();
       return;
     }
   } catch (err) {
     logger.error({ err }, "[HorizonListener] Failed to fetch latest ledger");
     horizonCB.onFailure();
+    onPollFailure(err);
     return;
   }
 
@@ -413,6 +455,7 @@ async function poll(): Promise<void> {
     });
     events = result.events;
     horizonCB.onSuccess(); // successful Horizon call
+    onPollSuccess();
   } catch (err: any) {
     const msg: string = err?.message ?? "";
     if (msg.includes("startLedger") || msg.includes("ledger")) {
@@ -422,12 +465,15 @@ async function poll(): Promise<void> {
         const latest = await server.getLatestLedger();
         await setLastIndexedLedger(latest.sequence);
         horizonCB.onSuccess();
-      } catch (_) {
+        onPollSuccess();
+      } catch (resetErr) {
         horizonCB.onFailure();
+        onPollFailure(resetErr);
       }
     } else {
       logger.error({ err }, "[HorizonListener] getEvents error");
       horizonCB.onFailure();
+      onPollFailure(err);
     }
     return;
   }
@@ -444,10 +490,11 @@ async function poll(): Promise<void> {
 
 // ─── public API ───────────────────────────────────────────────────────────────
 
-let intervalId: NodeJS.Timeout | null = null;
+let timerId: NodeJS.Timeout | null = null;
+let running = false;
 
 export function startHorizonListener(): void {
-  if (intervalId) return;
+  if (timerId || running) return;
 
   const contractIds = [
     config.stellar.escrowContractId,
@@ -466,22 +513,35 @@ export function startHorizonListener(): void {
   );
   logger.info({ contractIds }, "[HorizonListener] Watching contracts");
 
+  running = true;
+
+  // Self-rescheduling loop (rather than a fixed setInterval) so a failed
+  // poll can back off exponentially — 1s, 2s, 4s, 8s... capped at 60s —
+  // instead of hammering an unreachable Horizon every POLL_INTERVAL_MS.
   const runPoll = async () => {
     try {
       await poll();
     } catch (err) {
       logger.error({ err }, "[HorizonListener] Poll error");
+      onPollFailure(err);
+    } finally {
+      if (running) {
+        const delay = consecutiveFailures > 0
+          ? computeReconnectBackoffMs(consecutiveFailures)
+          : POLL_INTERVAL_MS;
+        timerId = setTimeout(() => void runPoll(), delay);
+      }
     }
   };
 
   void runPoll();
-  intervalId = setInterval(() => void runPoll(), POLL_INTERVAL_MS);
 }
 
 export function stopHorizonListener(): void {
-  if (intervalId) {
-    clearInterval(intervalId);
-    intervalId = null;
+  running = false;
+  if (timerId) {
+    clearTimeout(timerId);
+    timerId = null;
     logger.info("[HorizonListener] Stopped");
   }
 }
