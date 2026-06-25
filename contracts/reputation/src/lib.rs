@@ -1837,6 +1837,57 @@ impl ReputationContract {
         Ok(())
     }
 
+    /// Admin: remove a review by index from a user's stored reviews.
+    /// - Requires admin auth (registered signer).
+    /// - Removes the review at `review_index` from `DataKey::Reviews(user)`.
+    /// - Does NOT recompute the aggregate; totals are recomputed lazily on read.
+    /// - Emits an event for audit: ("reput", "review_removed") -> (user, review_index, removed_by)
+    pub fn admin_remove_review(
+        env: Env,
+        admin: Address,
+        user: Address,
+        review_index: u32,
+    ) -> Result<(), ReputationError> {
+        admin.require_auth();
+        require_not_paused(&env)?;
+        if !is_signer(&env, &admin) {
+            return Err(ReputationError::NotAdmin);
+        }
+
+        let reviews_key = DataKey::Reviews(user.clone());
+        let mut reviews: Vec<Review> = env
+            .storage()
+            .persistent()
+            .get(&reviews_key)
+            .unwrap_or(Vec::new(&env));
+
+        if review_index >= reviews.len() {
+            return Err(ReputationError::ReviewNotFound);
+        }
+
+        let removed = reviews.get(review_index).unwrap();
+        let reviewer = removed.reviewer.clone();
+        let job_id = removed.job_id;
+
+        reviews.remove(review_index);
+        env.storage().persistent().set(&reviews_key, &reviews);
+        bump_reviews_ttl(&env, &user);
+
+        let review_exists_key = DataKey::ReviewExists(reviewer.clone(), user.clone(), job_id);
+        if env.storage().persistent().has(&review_exists_key) {
+            env.storage().persistent().remove(&review_exists_key);
+        }
+
+        // Do NOT update legacy accumulators here; recomputation is lazy on next read.
+
+        env.events().publish(
+            (symbol_short!("reput"), symbol_short!("review_removed")),
+            (user, review_index, admin),
+        );
+
+        Ok(())
+    }
+
     pub fn get_review_appeal(
         env: Env,
         reviewer: Address,
@@ -2155,5 +2206,119 @@ mod tests {
 
         // Try to call without dispute contract set
         client.apply_dispute_outcome(&user, &DisputeOutcome::Won);
+    }
+
+    #[test]
+    fn test_admin_remove_review_by_index() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ReputationContract);
+        let client = ReputationContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&vec![&env, admin.clone()], &1, &0);
+
+        let reviewee = Address::generate(&env);
+        let reviewer1 = Address::generate(&env);
+        let reviewer2 = Address::generate(&env);
+        let reviewer3 = Address::generate(&env);
+
+        // Create three reviews: ratings 5,3,4 each with MIN_REVIEW_STAKE_DEFAULT weight
+        let r1 = Review {
+            reviewer: reviewer1.clone(),
+            reviewee: reviewee.clone(),
+            job_id: 1,
+            rating: 5,
+            comment: String::from_str(&env, "r1"),
+            stake_weight: MIN_REVIEW_STAKE_DEFAULT,
+            timestamp: env.ledger().timestamp(),
+        };
+        let r2 = Review {
+            reviewer: reviewer2.clone(),
+            reviewee: reviewee.clone(),
+            job_id: 2,
+            rating: 3,
+            comment: String::from_str(&env, "r2"),
+            stake_weight: MIN_REVIEW_STAKE_DEFAULT,
+            timestamp: env.ledger().timestamp(),
+        };
+        let r3 = Review {
+            reviewer: reviewer3.clone(),
+            reviewee: reviewee.clone(),
+            job_id: 3,
+            rating: 4,
+            comment: String::from_str(&env, "r3"),
+            stake_weight: MIN_REVIEW_STAKE_DEFAULT,
+            timestamp: env.ledger().timestamp(),
+        };
+
+        let reviews = vec![env, r1, r2, r3];
+        // Set persisted reviews and review_exists flags and a legacy reputation record
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Reviews(reviewee.clone()), &reviews);
+
+            env.storage().persistent().set(
+                &DataKey::ReviewExists(reviewer1.clone(), reviewee.clone(), 1),
+                &true,
+            );
+            env.storage().persistent().set(
+                &DataKey::ReviewExists(reviewer2.clone(), reviewee.clone(), 2),
+                &true,
+            );
+            env.storage().persistent().set(
+                &DataKey::ReviewExists(reviewer3.clone(), reviewee.clone(), 3),
+                &true,
+            );
+
+            // Legacy accumulator: sum ratings * weight
+            let total_score = (5u64 + 3u64 + 4u64) * (MIN_REVIEW_STAKE_DEFAULT as u64);
+            let total_weight = 3u64 * (MIN_REVIEW_STAKE_DEFAULT as u64);
+            env.storage().persistent().set(
+                &DataKey::Reputation(reviewee.clone()),
+                &UserReputation {
+                    user: reviewee.clone(),
+                    total_score,
+                    total_weight,
+                    review_count: 3,
+                    last_updated_ledger: env.ledger().timestamp() as u32,
+                },
+            );
+        });
+
+        // Sanity check: average rating should be 400 ( (12/3)*100 )
+        let before = client.get_average_rating(&reviewee).unwrap();
+        assert_eq!(before, 400);
+
+        // Admin removes index 1 (the middle review with rating 3)
+        client.admin_remove_review(&admin, &reviewee, &1);
+
+        // Reviews length should be 2 now
+        assert_eq!(client.get_reviews(&reviewee).len(), 2);
+
+        // New average should be ((5+4)/2)*100 = 450
+        let after = client.get_average_rating(&reviewee).unwrap();
+        assert_eq!(after, 450);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #14)")]
+    fn test_admin_remove_review_unauthorized_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ReputationContract);
+        let client = ReputationContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&vec![&env, admin.clone()], &1, &0);
+
+        let non_admin = Address::generate(&env);
+        let reviewee = Address::generate(&env);
+
+        // Call without being a registered signer — should panic with NotAdmin
+        client.admin_remove_review(&non_admin, &reviewee, &0);
     }
 }
