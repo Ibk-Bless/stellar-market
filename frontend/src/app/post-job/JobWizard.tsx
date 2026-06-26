@@ -12,7 +12,7 @@ import {
   Eye,
 } from "lucide-react";
 import axios from "axios";
-import { z } from "zod";
+import { z, ZodType } from "zod";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useAuth } from "@/context/AuthContext";
@@ -108,7 +108,7 @@ export default function JobWizard() {
     setValue,
     getValues,
   } = useForm<FormValues>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(schema as ZodType<FormValues>),
     mode: "onBlur",
     defaultValues: (() => {
       const draft =
