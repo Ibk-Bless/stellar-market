@@ -3,6 +3,8 @@ import { PrismaClient } from "@prisma/client";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { validate } from "../middleware/validation";
 import { asyncHandler } from "../middleware/error";
+import { AppError } from "../errors/AppError";
+import { ErrorCodes } from "../errors/codes";
 import { RecommendationQueueService } from "../services/recommendation-queue.service";
 import {
   createJobSchema,
@@ -27,6 +29,16 @@ import {
 } from "../services/contract.service";
 
 const router = Router();
+
+const JOB_LIST_SELECT = {
+  id: true, title: true, budget: true, status: true,
+  category: true, createdAt: true, skills: true, deadline: true,
+  escrowStatus: true, clientId: true, freelancerId: true, updatedAt: true,
+  client: { select: { id: true, username: true, avatarUrl: true } },
+  freelancer: { select: { id: true, username: true, avatarUrl: true } },
+  _count: { select: { applications: true } },
+} satisfies Record<string, any>;
+
 /**
  * @swagger
  * tags:
@@ -320,14 +332,7 @@ router.get(
 
         const jobs = await prisma.job.findMany({
           where: paginatedWhere,
-          include: {
-            client: { select: { id: true, username: true, avatarUrl: true } },
-            freelancer: {
-              select: { id: true, username: true, avatarUrl: true },
-            },
-            milestones: true,
-            _count: { select: { applications: true } },
-          },
+          select: JOB_LIST_SELECT,
           orderBy,
           take: safeLimit + 1,
         });
@@ -366,14 +371,7 @@ router.get(
       const [jobs, total] = await Promise.all([
         prisma.job.findMany({
           where,
-          include: {
-            client: { select: { id: true, username: true, avatarUrl: true } },
-            freelancer: {
-              select: { id: true, username: true, avatarUrl: true },
-            },
-            milestones: true,
-            _count: { select: { applications: true } },
-          },
+          select: JOB_LIST_SELECT,
           orderBy,
           skip,
           take: safeLimit,
@@ -430,15 +428,10 @@ router.get(
     const [jobs, total] = await Promise.all([
       prisma.job.findMany({
         where,
+        select: JOB_LIST_SELECT,
         skip,
         take: safeLimit,
         orderBy: { createdAt: "desc" },
-        include: {
-          client: { select: { id: true, username: true, avatarUrl: true } },
-          freelancer: { select: { id: true, username: true, avatarUrl: true } },
-          milestones: true,
-          _count: { select: { applications: true } },
-        },
       }),
       prisma.job.count({ where }),
     ]);
@@ -471,9 +464,7 @@ router.get(
     });
 
     if (!user || user.role !== "FREELANCER") {
-      return res
-        .status(403)
-        .json({ error: "Only freelancers can view saved jobs." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Only freelancers can view saved jobs.", 403);
     }
 
     const {
@@ -525,14 +516,10 @@ router.get(
     const [savedJobs, total] = await Promise.all([
       prisma.savedJob.findMany({
         where: savedJobWhere,
-        include: {
-          job: {
-            include: {
-              client: { select: { id: true, username: true, avatarUrl: true } },
-              milestones: true,
-              _count: { select: { applications: true } },
-            },
-          },
+        select: {
+          jobId: true,
+          createdAt: true,
+          job: { select: JOB_LIST_SELECT },
         },
         orderBy: { createdAt: "desc" },
         skip,
@@ -595,7 +582,7 @@ router.get(
     });
 
 	    if (!job) {
-	      return res.status(404).json({ error: "Job not found." });
+	      throw new AppError(ErrorCodes.NOT_FOUND, "Job not found.", 404);
 	    }
 
 	    const lastModified = (job as any).updatedAt ?? (job as any).createdAt;
@@ -710,7 +697,7 @@ router.post(
     });
 
     if (!user || user.role !== "CLIENT") {
-      return res.status(403).json({ error: "Only clients can post jobs." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Only clients can post jobs.", 403);
     }
 
     const { title, description, budget, skills, deadline } = req.body;
@@ -765,12 +752,10 @@ router.put(
     });
 
     if (!job) {
-      return res.status(404).json({ error: "Job not found." });
+      throw new AppError(ErrorCodes.NOT_FOUND, "Job not found.", 404);
     }
     if (job.clientId !== req.userId) {
-      return res
-        .status(403)
-        .json({ error: "Not authorized to update this job." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Not authorized to update this job.", 403);
     }
 
     const updateData = req.body;
@@ -807,12 +792,10 @@ router.delete(
     });
 
     if (!job) {
-      return res.status(404).json({ error: "Job not found." });
+      throw new AppError(ErrorCodes.NOT_FOUND, "Job not found.", 404);
     }
     if (job.clientId !== req.userId) {
-      return res
-        .status(403)
-        .json({ error: "Not authorized to delete this job." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Not authorized to delete this job.", 403);
     }
 
     await prisma.job.update({
@@ -848,12 +831,10 @@ router.patch(
     });
 
     if (!job) {
-      return res.status(404).json({ error: "Job not found." });
+      throw new AppError(ErrorCodes.NOT_FOUND, "Job not found.", 404);
     }
     if (job.clientId !== req.userId) {
-      return res
-        .status(403)
-        .json({ error: "Not authorized to update this job." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Not authorized to update this job.", 403);
     }
 
     const updated = await prisma.job.update({
@@ -891,19 +872,15 @@ router.patch(
     });
 
     if (!job) {
-      return res.status(404).json({ error: "Job not found." });
+      throw new AppError(ErrorCodes.NOT_FOUND, "Job not found.", 404);
     }
     if (job.clientId !== req.userId) {
-      return res
-        .status(403)
-        .json({ error: "Only the client can mark the job as complete." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Only the client can mark the job as complete.", 403);
     }
 
     const allApproved = job.milestones.every((m) => m.status === "APPROVED");
     if (!allApproved) {
-      return res.status(400).json({
-        error: "All milestones must be approved before completing the job.",
-      });
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "All milestones must be approved before completing the job.", 400);
     }
 
     const updated = await prisma.job.update({
@@ -952,7 +929,7 @@ router.post(
     });
 
     if (!user || user.role !== "FREELANCER") {
-      return res.status(403).json({ error: "Only freelancers can save jobs." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Only freelancers can save jobs.", 403);
     }
 
     const id = req.params.id as string;
@@ -964,7 +941,7 @@ router.post(
     });
 
     if (!job) {
-      return res.status(404).json({ error: "Job not found." });
+      throw new AppError(ErrorCodes.NOT_FOUND, "Job not found.", 404);
     }
 
     const existingSave = await prisma.savedJob.findUnique({
@@ -977,7 +954,7 @@ router.post(
     });
 
     if (existingSave) {
-      return res.status(409).json({ error: "Job already saved." });
+      throw new AppError(ErrorCodes.CONFLICT, "Job already saved.", 409);
     }
 
     const savedJob = await prisma.savedJob.create({
@@ -1006,9 +983,7 @@ router.delete(
     });
 
     if (!user || user.role !== "FREELANCER") {
-      return res
-        .status(403)
-        .json({ error: "Only freelancers can unsave jobs." });
+      throw new AppError(ErrorCodes.FORBIDDEN, "Only freelancers can unsave jobs.", 403);
     }
 
     const id = req.params.id as string;
@@ -1023,7 +998,7 @@ router.delete(
     });
 
     if (!savedJob) {
-      return res.status(404).json({ error: "Job was not saved." });
+      throw new AppError(ErrorCodes.NOT_FOUND, "Job was not saved.", 404);
     }
 
     await prisma.savedJob.delete({

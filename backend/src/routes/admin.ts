@@ -176,7 +176,7 @@ router.patch(
 
 /**
  * DELETE /api/admin/jobs/:id
- * Remove a fraudulent job listing (hard delete)
+ * Remove a job listing (soft-delete to preserve audit trail)
  */
 router.delete(
   "/jobs/:id",
@@ -190,8 +190,11 @@ router.delete(
         return;
       }
 
-      // Hard delete for admin (permanent removal)
-      await prisma.job.delete({ where: { id } });
+      // Soft-delete to preserve audit trail and related records
+      await prisma.job.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
 
       // Notify uploader
       if (job.clientId) {
