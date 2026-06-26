@@ -1376,6 +1376,11 @@ impl ReputationContract {
             .get(&reviews_key)
             .unwrap_or(Vec::new(env));
 
+        // Extend TTL on read so that a frequently-read entry never silently expires.
+        if !reviews.is_empty() {
+            bump_reviews_ttl(env, &user);
+        }
+
         let review_count = reviews.len() as u32;
         let mut total_score = 0u64;
         let mut total_weight = 0u64;

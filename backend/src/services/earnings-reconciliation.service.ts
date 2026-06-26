@@ -20,8 +20,20 @@ export interface OnChainPayment {
 }
 
 const HORIZON_PAGE_LIMIT = 200;
+const CACHE_TTL_MS = 60_000; // 60 seconds
 
 let cachedServer: Horizon.Server | null = null;
+
+interface CacheEntry {
+  payments: OnChainPayment[];
+  expiresAt: number;
+}
+
+const paymentCache = new Map<string, CacheEntry>();
+
+function cacheKey(wallet: string, from: Date, to: Date): string {
+  return `${wallet}:${from.toISOString()}:${to.toISOString()}`;
+}
 
 function getServer(): Horizon.Server {
   if (!cachedServer) {
@@ -57,14 +69,19 @@ const PAYMENT_TYPES = new Set([
  * Fetch every inbound payment credited to `walletAddress` between `from` and
  * `to`, walking Horizon's pagination cursor until the window closes.
  *
- * Records are requested oldest-first so the date filter can short-circuit once
- * we pass the `to` boundary.
+ * Results are cached for CACHE_TTL_MS to avoid hammering Horizon when the
+ * reconciliation panel is polled frequently.
  */
 export async function fetchOnChainPayments(
   walletAddress: string,
   from: Date,
   to: Date,
 ): Promise<OnChainPayment[]> {
+  const key = cacheKey(walletAddress, from, to);
+  const cached = paymentCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.payments;
+  }
   const server = getServer();
   const results: OnChainPayment[] = [];
 
@@ -118,5 +135,6 @@ export async function fetchOnChainPayments(
     });
   }
 
+  paymentCache.set(key, { payments: results, expiresAt: Date.now() + CACHE_TTL_MS });
   return results;
 }

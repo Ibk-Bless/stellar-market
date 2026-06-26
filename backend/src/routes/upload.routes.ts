@@ -85,11 +85,17 @@ router.post(
       }
 
       // Validate file content (MIME sniffing)
-      const validation = await validateFileMimeType(req.file.path);
+      const validation = await validateFileMimeType(req.file.path, req.file.mimetype);
       if (!validation.valid) {
         // Clean up uploaded file
         fs.unlinkSync(req.file.path);
-        return res.status(400).json({
+        
+        const statusCode = validation.error?.includes("match actual file content") || 
+                           validation.error?.includes("Unsupported file type signature") 
+                           ? 415 
+                           : 400;
+                           
+        return res.status(statusCode).json({
           error: validation.error || "Invalid file type",
         });
       }

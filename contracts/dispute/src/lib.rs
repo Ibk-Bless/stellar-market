@@ -939,6 +939,20 @@ impl DisputeContract {
             (count, job_id, initiator, client, freelancer, assigned_arbitrators),
         );
 
+        // Notify the escrow contract so it can transition the job to Disputed and emit
+        // a structured escrow-side DisputeRaised event that indexers can consume.
+        if let Some(escrow_contract) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::EscrowContract)
+        {
+            let _ = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                &escrow_contract,
+                &Symbol::new(&env, "mark_job_disputed"),
+                vec![&env, job_id.into_val(&env), count.into_val(&env)],
+            );
+        }
+
         Ok(count)
     }
 

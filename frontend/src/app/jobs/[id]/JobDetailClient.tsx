@@ -39,6 +39,7 @@ import { parseJobIdFromResult } from "@/utils/stellar";
 import ShareMenu from "@/components/ShareMenu";
 import { useToast } from "@/components/Toast";
 import WalletAddress from "@/components/WalletAddress";
+import ApproveMilestoneModal from "@/components/ApproveMilestoneModal";
 
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
@@ -111,6 +112,7 @@ export default function JobDetailClient() {
   const [extendDeadlineDate, setExtendDeadlineDate] = useState<Record<string, string>>({});
   const [pendingOnChainAction, setPendingOnChainAction] = useState<PendingOnChainAction | null>(null);
   const [selectedPaymentToken, setSelectedPaymentToken] = useState<(typeof PAYMENT_TOKENS)[number]>("XLM");
+  const [approveMilestoneModalId, setApproveMilestoneModalId] = useState<string | null>(null);
 
   const isClient = Boolean(job && address === job.client.walletAddress);
 
@@ -769,6 +771,29 @@ export default function JobDetailClient() {
         }
       />
 
+      {(() => {
+        const pendingMilestone = approveMilestoneModalId
+          ? job.milestones.find((m) => m.id === approveMilestoneModalId)
+          : null;
+        return (
+          <ApproveMilestoneModal
+            isOpen={Boolean(pendingMilestone)}
+            milestoneTitle={pendingMilestone?.title ?? ""}
+            milestoneAmount={pendingMilestone?.amount ?? 0}
+            freelancerName={job.freelancer?.username ?? job.freelancer?.walletAddress ?? "Freelancer"}
+            milestoneDescription={pendingMilestone?.description ?? ""}
+            isLoading={Boolean(approveMilestoneModalId && actioningMilestoneId === approveMilestoneModalId)}
+            onClose={() => setApproveMilestoneModalId(null)}
+            onConfirm={() => {
+              if (approveMilestoneModalId) {
+                setApproveMilestoneModalId(null);
+                void handleApproveMilestone(approveMilestoneModalId);
+              }
+            }}
+          />
+        );
+      })()}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Content */}
         <div className="lg:col-span-2">
@@ -917,7 +942,7 @@ export default function JobDetailClient() {
               actioningMilestoneId={actioningMilestoneId}
               recentlyApprovedMilestoneId={recentlyApprovedMilestoneId}
               onSubmitMilestone={(milestoneId) => void handleSubmitMilestone(milestoneId)}
-              onApproveMilestone={(milestoneId) => void handleApproveMilestone(milestoneId)}
+              onApproveMilestone={(milestoneId) => setApproveMilestoneModalId(milestoneId)}
               onRequestRevision={(milestoneId) =>
                 void handleUpdateMilestoneStatus(milestoneId, "REJECTED")
               }

@@ -330,6 +330,8 @@ enum DataKey {
     RateSnapshot(u64),
     /// Per-caller nonce to prevent replay attacks within the TTL window.
     Nonce(Address, Symbol, u64),
+    /// Registered dispute contract — the only address allowed to call mark_job_disputed.
+    DisputeContract,
 }
 
 /// Fixed-point scale for oracle prices: prices are quoted in XLM stroops per token
@@ -765,6 +767,56 @@ impl EscrowContract {
     /// Return the configured price oracle address, if any.
     pub fn get_price_oracle(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::PriceOracle)
+    }
+
+    /// Register the dispute contract address. Only a registered multisig signer may call this.
+    pub fn set_dispute_contract(
+        env: Env,
+        admin: Address,
+        dispute_contract: Address,
+    ) -> Result<(), EscrowError> {
+        admin.require_auth();
+        if !is_signer(&env, &admin) {
+            return Err(EscrowError::NotAdmin);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeContract, &dispute_contract);
+        Ok(())
+    }
+
+    /// Called by the registered dispute contract to transition a job to the Disputed state
+    /// and emit a structured DisputeRaised event that indexers can consume.
+    pub fn mark_job_disputed(
+        env: Env,
+        job_id: u64,
+        dispute_id: u64,
+    ) -> Result<(), EscrowError> {
+        let dispute_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeContract)
+            .ok_or(EscrowError::Unauthorized)?;
+        dispute_contract.require_auth();
+
+        let mut job: Job = env
+            .storage()
+            .persistent()
+            .get(&get_job_key(job_id))
+            .ok_or(EscrowError::JobNotFound)?;
+        bump_job_ttl(&env, job_id);
+
+        require_state_disputable(&job)?;
+
+        job.status = JobStatus::Disputed;
+        env.storage().persistent().set(&get_job_key(job_id), &job);
+
+        env.events().publish(
+            (symbol_short!("escrow"), Symbol::new(&env, "disputed")),
+            (job_id, dispute_id, job.client, job.freelancer),
+        );
+
+        Ok(())
     }
 
     /// Return the exchange-rate parity snapshot recorded when the job was funded.
