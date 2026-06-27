@@ -205,6 +205,15 @@ pub enum DisputeResolution {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutBreakdown {
+    pub client: i128,
+    pub freelancer: i128,
+    pub platform: i128,
+    pub arbitrators: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MilestoneStatus {
     Pending,
     InProgress,
@@ -1522,6 +1531,67 @@ impl EscrowContract {
         );
 
         Ok(())
+    }
+
+    /// Pure payout breakdown for a dispute resolution. No state is read or
+    /// written — safe for frontend preview without a transaction.
+    /// All four amounts always sum to `escrow_amount` (no dust).
+    pub fn calculate_payout(
+        _env: Env,
+        escrow_amount: i128,
+        platform_fee_bps: u32,
+        arbitrator_fee_bps: u32,
+        outcome: DisputeResolution,
+    ) -> PayoutBreakdown {
+        let platform_fee = (escrow_amount * platform_fee_bps as i128) / 10_000;
+        let arbitrator_fee = (escrow_amount * arbitrator_fee_bps as i128) / 10_000;
+        let remaining = escrow_amount - platform_fee - arbitrator_fee;
+
+        match outcome {
+            DisputeResolution::ClientWins => PayoutBreakdown {
+                client: remaining,
+                freelancer: 0,
+                platform: platform_fee,
+                arbitrators: arbitrator_fee,
+            },
+            DisputeResolution::FreelancerWins => PayoutBreakdown {
+                client: 0,
+                freelancer: remaining,
+                platform: platform_fee,
+                arbitrators: arbitrator_fee,
+            },
+            DisputeResolution::RefundBoth => {
+                let half = remaining / 2;
+                PayoutBreakdown {
+                    client: half,
+                    freelancer: remaining - half,
+                    platform: platform_fee,
+                    arbitrators: arbitrator_fee,
+                }
+            }
+            DisputeResolution::RefundSplit(pct_client) => {
+                let pct = if pct_client > 100 { 100 } else { pct_client } as i128;
+                let client_amount = (remaining * pct) / 100;
+                PayoutBreakdown {
+                    client: client_amount,
+                    freelancer: remaining - client_amount,
+                    platform: platform_fee,
+                    arbitrators: arbitrator_fee,
+                }
+            }
+            DisputeResolution::Escalate => PayoutBreakdown {
+                client: 0,
+                freelancer: 0,
+                platform: 0,
+                arbitrators: 0,
+            },
+            DisputeResolution::MaliciousFiling => PayoutBreakdown {
+                client: 0,
+                freelancer: 0,
+                platform: remaining + platform_fee,
+                arbitrators: arbitrator_fee,
+            },
+        }
     }
 
     /// Freelancer submits a milestone as completed.

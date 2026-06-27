@@ -5056,3 +5056,226 @@ fn test_release_milestone_nonce_replay_rejected() {
     // Replay same nonce 42 — should fail with NonceReplay
     contract.release_milestone(&job_id, &1, &client_addr, &0, &42);
 }
+
+// ── calculate_payout tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_calculate_payout_client_wins() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::ClientWins);
+
+    assert_eq!(result.client, 965);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_freelancer_wins() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::FreelancerWins);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 965);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_both() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundBoth);
+
+    // 965 / 2 = 482 (truncated), freelancer gets 965 - 482 = 483
+    assert_eq!(result.client, 482);
+    assert_eq!(result.freelancer, 483);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_split() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // 30% to client, 70% to freelancer
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundSplit(30));
+
+    // remaining = 965, client = 965 * 30 / 100 = 289, freelancer = 965 - 289 = 676
+    assert_eq!(result.client, 289);
+    assert_eq!(result.freelancer, 676);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_split_100_percent() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundSplit(100));
+
+    assert_eq!(result.client, 965);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_split_over_100_clamped() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // 200 should be clamped to 100 (all remaining to client)
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundSplit(200));
+
+    assert_eq!(result.client, 965);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_escalate() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // Escalate means no payout yet — all zeros
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::Escalate);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 0);
+    assert_eq!(result.arbitrators, 0);
+}
+
+#[test]
+fn test_calculate_payout_malicious_filing() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // Full remaining + platform fee goes to treasury (platform)
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::MaliciousFiling);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    // platform = remaining (965) + platform_fee (25) = 990
+    assert_eq!(result.platform, 990);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_zero_escrow() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&0_i128, &500_u32, &200_u32, &DisputeResolution::ClientWins);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 0);
+    assert_eq!(result.arbitrators, 0);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 0);
+}
+
+#[test]
+fn test_calculate_payout_max_fee() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // 100% platform fee + 0% arbitrator fee
+    let result = client.calculate_payout(&5000_i128, &10000_u32, &0_u32, &DisputeResolution::ClientWins);
+
+    assert_eq!(result.platform, 5000);
+    assert_eq!(result.arbitrators, 0);
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 5000);
+}
+
+#[test]
+fn test_calculate_payout_rounding_client_wins() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // Amount that creates rounding in fee calculation
+    // 7 * 333 / 10000 = 2 (truncated), 7 * 333 / 10000 = 2
+    // remaining = 7 - 2 - 2 = 3
+    let result = client.calculate_payout(&7_i128, &3333_u32, &3333_u32, &DisputeResolution::ClientWins);
+
+    // platform_fee = 7 * 3333 / 10000 = 2
+    // arbitrator_fee = 7 * 3333 / 10000 = 2
+    // client = 7 - 2 - 2 = 3
+    assert_eq!(result.platform, 2);
+    assert_eq!(result.arbitrators, 2);
+    assert_eq!(result.client, 3);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 7);
+}
+
+#[test]
+fn test_calculate_payout_sum_invariant() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let contract = EscrowContractClient::new(&env, &escrow_id);
+
+    let outcomes = [
+        DisputeResolution::ClientWins,
+        DisputeResolution::FreelancerWins,
+        DisputeResolution::RefundBoth,
+        DisputeResolution::RefundSplit(0),
+        DisputeResolution::RefundSplit(30),
+        DisputeResolution::RefundSplit(50),
+        DisputeResolution::RefundSplit(70),
+        DisputeResolution::RefundSplit(100),
+        DisputeResolution::MaliciousFiling,
+    ];
+
+    let test_amounts: [i128; 8] = [0, 1, 7, 100, 1000, 9999, 100_000, 1_000_000_000_000];
+    let fee_combos: [(u32, u32); 6] = [
+        (0, 0),
+        (100, 0),
+        (0, 100),
+        (250, 100),
+        (500, 500),
+        (1000, 500),
+    ];
+
+    for &amount in &test_amounts {
+        for &(pf, af) in &fee_combos {
+            for outcome in &outcomes {
+                let result = contract.calculate_payout(&amount, &pf, &af, outcome);
+                let sum = result.client + result.freelancer + result.platform + result.arbitrators;
+                assert_eq!(
+                    sum, amount,
+                    "sum mismatch: amount={}, pf_bps={}, af_bps={}, outcome={:?}",
+                    amount, pf, af, outcome
+                );
+            }
+        }
+    }
+}
