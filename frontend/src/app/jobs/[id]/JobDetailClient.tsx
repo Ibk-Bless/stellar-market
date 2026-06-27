@@ -1527,6 +1527,21 @@ export default function JobDetailClient() {
           </div>
         </div>
       )}
+
+      {/* Sticky Apply bar — mobile only, freelancers, open jobs not yet applied */}
+      {user?.role === "FREELANCER" &&
+        !isOwnJob &&
+        job.status === "OPEN" &&
+        !hasApplied && (
+          <div className="sm:hidden fixed bottom-0 inset-x-0 z-40 border-t border-theme-border bg-theme-card/95 px-4 py-3 backdrop-blur-sm">
+            <button
+              className="btn-primary w-full"
+              onClick={() => setApplyModalOpen(true)}
+            >
+              Apply for this Job
+            </button>
+          </div>
+        )}
     </div>
   );
 }

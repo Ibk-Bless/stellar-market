@@ -14,6 +14,7 @@ import StatusBadge from "./StatusBadge";
 import EscrowStatusBadge from "./EscrowStatusBadge";
 import { Job, User as UserType } from "@/types";
 import { useAuth } from "@/context/AuthContext";
+import { useRelativeTime } from "@/hooks/useRelativeTime";
 
 interface JobCardProps {
   job: Job;
@@ -72,6 +73,7 @@ export default function JobCard({
 }: JobCardProps) {
   const authUser = useAuth().user ?? null;
   const user = viewer ?? authUser;
+  const postedAt = useRelativeTime(new Date(job.createdAt));
   const isFreelancer = user?.role === "FREELANCER";
   const isClient = user?.role === "CLIENT";
   const isOwnJob = user?.id === job.client.id;
@@ -179,7 +181,7 @@ export default function JobCard({
         </div>
         <div className="flex items-center gap-1">
           <Clock size={14} />
-          <span>{new Date(job.createdAt).toLocaleDateString()}</span>
+          <span>{postedAt}</span>
         </div>
       </div>
 
