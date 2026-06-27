@@ -130,6 +130,65 @@ export const requireAdmin = async (
   }
 };
 
+/**
+ * Optional authentication middleware.
+ *
+ * Identical to `authenticate` except it does NOT reject the request when no
+ * token is supplied.  Routes that are publicly accessible but need to behave
+ * differently for signed-in users (e.g. field-level projections) should use
+ * this middleware instead of `authenticate`.
+ *
+ * When a valid token is present, `req.userId` and `req.userRole` are populated
+ * exactly as they would be by `authenticate`.  When no token is present (or the
+ * token is invalid) the request continues with `req.userId === undefined`.
+ */
+export const optionalAuthenticate = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  const authHeader = req.headers.authorization;
+
+  // No token supplied — continue as anonymous
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return next();
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, config.jwtSecret) as {
+      userId: string;
+      walletAddress?: string;
+      purpose?: string;
+    };
+
+    // A 2FA-pending token is not a full session; treat as anonymous
+    if (decoded.purpose === "2fa_pending") {
+      return next();
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { role: true, emailVerified: true },
+    });
+
+    if (!user) {
+      return next();
+    }
+
+    req.userId = decoded.userId;
+    req.userRole = user.role;
+    if (decoded.walletAddress) {
+      req.userWalletAddress = decoded.walletAddress;
+    }
+  } catch {
+    // Invalid / expired token — continue as anonymous
+  }
+
+  return next();
+};
+
 export const checkSuspension = async (
   req: AuthRequest,
   res: Response,

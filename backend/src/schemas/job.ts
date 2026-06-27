@@ -96,3 +96,118 @@ export const getSavedJobsQuerySchema = paginationSchema.extend({
   minBudget: z.coerce.number().positive().optional(),
   maxBudget: z.coerce.number().positive().optional(),
 });
+
+// ─── Response projection schemas ─────────────────────────────────────────────
+//
+// Three tiers control what client data is returned from job endpoints:
+//
+//  publicJobProjection       – unauthenticated callers
+//                              client.email / client.walletAddress are never included
+//  authenticatedJobProjection – signed-in non-client callers
+//                              client.walletAddress is exposed; email is never exposed
+//  ownerJobProjection         – the client who owns the job (full record minus email)
+//
+// All three omit client.email because it must never be sent to non-clients.
+
+/** Minimal client stub returned for anonymous requests. */
+const publicClientStub = z.object({
+  id: z.string(),
+  username: z.string(),
+  avatarUrl: z.string().nullable().optional(),
+});
+
+/** Client stub for authenticated non-owner callers — includes walletAddress. */
+const authenticatedClientStub = publicClientStub.extend({
+  walletAddress: z.string().nullable().optional(),
+});
+
+/** Shared job base fields present in every projection. */
+const baseJobFields = {
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  budget: z.number(),
+  category: z.string(),
+  createdAt: z.date().or(z.string()),
+};
+
+/**
+ * Unauthenticated projection.
+ * Only exposes: id, title, description, budget, category, createdAt,
+ * and client.displayName (username + avatarUrl).
+ * client.email and client.walletAddress are intentionally absent.
+ */
+export const publicJobProjectionSchema = z.object({
+  ...baseJobFields,
+  client: publicClientStub,
+});
+
+/**
+ * Authenticated non-client projection.
+ * Extends public projection with walletAddress and operational fields.
+ * client.email is intentionally absent.
+ */
+export const authenticatedJobProjectionSchema = z.object({
+  ...baseJobFields,
+  status: z.string(),
+  skills: z.array(z.string()),
+  deadline: z.date().or(z.string()),
+  escrowStatus: z.string(),
+  clientId: z.string(),
+  freelancerId: z.string().nullable().optional(),
+  updatedAt: z.date().or(z.string()),
+  client: authenticatedClientStub,
+  freelancer: z
+    .object({
+      id: z.string(),
+      username: z.string(),
+      avatarUrl: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+  _count: z.object({ applications: z.number() }).optional(),
+});
+
+/**
+ * Owner (client) projection — full record, email still excluded.
+ * Clients can see walletAddress and all operational fields on their own jobs.
+ */
+export const ownerJobProjectionSchema = authenticatedJobProjectionSchema;
+
+// ─── List response wrappers ───────────────────────────────────────────────────
+
+const paginationMeta = z.object({
+  total: z.number(),
+  page: z.number().nullable().optional(),
+  limit: z.number(),
+  totalPages: z.number().optional(),
+  hasNext: z.boolean(),
+  nextCursor: z.string().nullable().optional(),
+});
+
+export const publicJobListResponseSchema = z.object({
+  data: z.array(publicJobProjectionSchema),
+  pagination: paginationMeta,
+});
+
+export const authenticatedJobListResponseSchema = z.object({
+  data: z.array(authenticatedJobProjectionSchema),
+  pagination: paginationMeta,
+});
+
+// ─── Single-job response schemas (GET /:id) ───────────────────────────────────
+
+/** Additional fields only present on single-job responses. */
+const singleJobExtra = {
+  milestones: z.array(z.any()).optional(),
+  applications: z.array(z.any()).optional(),
+  isSaved: z.boolean().optional(),
+  escrow_status: z.string().optional(),
+  revisionProposal: z.any().nullable().optional(),
+};
+
+export const publicSingleJobResponseSchema = publicJobProjectionSchema.extend(singleJobExtra);
+
+export const authenticatedSingleJobResponseSchema = authenticatedJobProjectionSchema.extend(singleJobExtra);
+
+export const ownerSingleJobResponseSchema = authenticatedSingleJobResponseSchema;

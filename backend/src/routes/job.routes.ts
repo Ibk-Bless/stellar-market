@@ -1,6 +1,6 @@
 import { Router, Response } from "express";
 import { PrismaClient } from "@prisma/client";
-import { authenticate, AuthRequest } from "../middleware/auth";
+import { authenticate, optionalAuthenticate, AuthRequest } from "../middleware/auth";
 import { validate } from "../middleware/validation";
 import { asyncHandler } from "../middleware/error";
 import { AppError } from "../errors/AppError";
@@ -13,6 +13,11 @@ import {
   getJobByIdParamSchema,
   updateJobStatusSchema,
   getSavedJobsQuerySchema,
+  publicJobListResponseSchema,
+  authenticatedJobListResponseSchema,
+  publicSingleJobResponseSchema,
+  authenticatedSingleJobResponseSchema,
+  ownerSingleJobResponseSchema,
 } from "../schemas";
 import { paginationSchema } from "../schemas/common";
 import {
@@ -32,13 +37,102 @@ import { MAX_PAGE_SIZE } from "../config";
 const router = Router();
 
 const JOB_LIST_SELECT = {
-  id: true, title: true, budget: true, status: true,
+  id: true, title: true, description: true, budget: true, status: true,
   category: true, createdAt: true, skills: true, deadline: true,
   escrowStatus: true, clientId: true, freelancerId: true, updatedAt: true,
-  client: { select: { id: true, username: true, avatarUrl: true } },
+  client: { select: { id: true, username: true, avatarUrl: true, walletAddress: true } },
   freelancer: { select: { id: true, username: true, avatarUrl: true } },
   _count: { select: { applications: true } },
 } satisfies Record<string, any>;
+
+// ─── Field projection helpers ─────────────────────────────────────────────────
+
+/** Strip private client fields for unauthenticated callers. */
+function toPublicJob(job: any) {
+  const { client, ...rest } = job;
+  return {
+    id: rest.id,
+    title: rest.title,
+    description: rest.description,
+    budget: rest.budget,
+    category: rest.category,
+    createdAt: rest.createdAt,
+    client: {
+      id: client.id,
+      username: client.username,
+      avatarUrl: client.avatarUrl ?? null,
+    },
+  };
+}
+
+/** Strip client.email (never sent); keep walletAddress for authenticated users. */
+function toAuthenticatedJob(job: any) {
+  const { client, ...rest } = job;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { email: _email, ...safeClient } = client;
+  return { ...rest, client: safeClient };
+}
+
+/**
+ * Apply the correct field projection before sending a job list response.
+ * Validates the final shape with the matching Zod schema and throws if
+ * validation fails (this catches accidental future field additions).
+ */
+function projectAndValidateList(jobs: any[], pagination: any, isAuthenticated: boolean, res: Response) {
+  if (!isAuthenticated) {
+    const payload = { data: jobs.map(toPublicJob), pagination };
+    const parsed = publicJobListResponseSchema.parse(payload);
+    return res.json(parsed);
+  }
+  const payload = { data: jobs.map(toAuthenticatedJob), pagination };
+  const parsed = authenticatedJobListResponseSchema.parse(payload);
+  return res.json(parsed);
+}
+
+/**
+ * Apply the correct field projection before sending a single-job response.
+ * Three tiers: public / authenticated-non-owner / owner.
+ */
+function projectAndValidateSingle(job: any, extra: Record<string, unknown>, requestUserId: string | undefined, res: Response) {
+  const merged = { ...job, ...extra };
+
+  // Unauthenticated
+  if (!requestUserId) {
+    const { client, ...rest } = merged;
+    const publicPayload = {
+      id: rest.id,
+      title: rest.title,
+      description: rest.description,
+      budget: rest.budget,
+      category: rest.category,
+      createdAt: rest.createdAt,
+      client: { id: client.id, username: client.username, avatarUrl: client.avatarUrl ?? null },
+      milestones: rest.milestones,
+      isSaved: rest.isSaved,
+      escrow_status: rest.escrow_status,
+      escrowStatus: rest.escrowStatus,
+      revisionProposal: rest.revisionProposal,
+    };
+    const parsed = publicSingleJobResponseSchema.parse(publicPayload);
+    return res.json(parsed);
+  }
+
+  // Authenticated — remove email regardless of role
+  const { client, ...rest } = merged;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { email: _email, ...safeClient } = client;
+  const authPayload = { ...rest, client: safeClient };
+
+  // Owner gets the full authenticated record (no extra gating needed beyond
+  // email removal, which is already applied above)
+  if (rest.clientId === requestUserId) {
+    const parsed = ownerSingleJobResponseSchema.parse(authPayload);
+    return res.json(parsed);
+  }
+
+  const parsed = authenticatedSingleJobResponseSchema.parse(authPayload);
+  return res.json(parsed);
+}
 
 /**
  * @swagger
@@ -141,6 +235,7 @@ router.get(
    *               $ref: '#/components/schemas/ErrorResponse'
    */
   validate({ query: getJobsQuerySchema }),
+  optionalAuthenticate,
   asyncHandler(async (req: AuthRequest, res: Response) => {
   const { page = 1, limit = 20, search, category, skill, skills, status, minBudget, maxBudget, clientId, token, sort, postedAfter, cursor } = (req as any).query;
     // Ensure limit is within bounds
@@ -404,7 +499,7 @@ router.get(
 
     res.set("X-Cache-Hit", hit.toString());
     res.setHeader("X-Max-Page-Size", String(MAX_PAGE_SIZE));
-    res.json(data);
+    return projectAndValidateList(data.data, data.pagination, !!req.userId, res);
   }),
 );
 
@@ -559,6 +654,7 @@ router.get(
 	router.get(
 	  "/:id",
 	  validate({ params: getJobByIdParamSchema }),
+	  optionalAuthenticate,
 	  asyncHandler(async (req: AuthRequest, res: Response) => {
 	    const id = req.params.id as string;
 	    const job = await prisma.job.findFirst({
@@ -568,7 +664,7 @@ router.get(
       },
       include: {
         client: {
-          select: { id: true, username: true, avatarUrl: true, bio: true },
+          select: { id: true, username: true, avatarUrl: true, bio: true, walletAddress: true },
         },
         freelancer: {
           select: { id: true, username: true, avatarUrl: true, bio: true },
@@ -641,13 +737,17 @@ router.get(
       }
     }
 
-    res.json({
-      ...job,
-      escrow_status: escrowStatus,
-      escrowStatus: escrowStatus,
-      revisionProposal,
-      isSaved,
-    });
+    return projectAndValidateSingle(
+      job,
+      {
+        escrow_status: escrowStatus,
+        escrowStatus: escrowStatus,
+        revisionProposal,
+        isSaved,
+      },
+      req.userId,
+      res,
+    );
   }),
 );
 
