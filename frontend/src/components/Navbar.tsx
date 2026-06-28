@@ -42,7 +42,7 @@ import { useToast } from "@/components/Toast";
 import ThemeToggleButton from "./ThemeToggleButton";
 import NotificationBell from "./NotificationBell";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 function UserMenu({ className }: { className?: string }) {
   const { address, disconnect, balance, balances, isLoadingBalance } = useWallet();

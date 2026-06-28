@@ -1,13 +1,7 @@
 import nodemailer from "nodemailer";
 import { config } from "../config";
 import { logger } from "../lib/logger";
-import { renderPasswordResetEmail } from "../templates/email/password-reset";
-import { renderVerificationEmail } from "../templates/email/verification";
-import { renderDisputeOpenedEmail } from "../templates/email/dispute-opened";
-import { renderDisputeResolvedEmail } from "../templates/email/dispute-resolved";
-import { renderMilestoneApprovedEmail } from "../templates/email/milestone-approved";
-import { renderPaymentReleasedEmail } from "../templates/email/payment-released";
-import { renderApplicationAcceptedEmail } from "../templates/email/application-accepted";
+import { renderEmailTemplate } from "../utils/emailTemplateRenderer";
 
 const transporter = nodemailer.createTransport({
   host: config.smtp.host,
@@ -22,10 +16,23 @@ const transporter = nodemailer.createTransport({
 export class EmailService {
   static async sendVerificationEmail(to: string, token: string): Promise<void> {
     const verifyUrl = `${config.frontendUrl}/auth/verify-email?token=${token}`;
+    
+    // Render the email body
+    const bodyHtml = renderEmailTemplate("verification", { verifyUrl });
+    
+    // Render the full layout
+    const html = renderEmailTemplate("layout", {
+      title: "Verify your email",
+      preheader: "Confirm your email address to finish setting up your account.",
+      bodyHtml,
+      actionUrl: verifyUrl,
+      actionLabel: "Verify email",
+    });
+    
     await this.sendHtml({
       to,
       subject: "Verify Your Email - StellarMarket",
-      html: renderVerificationEmail({ verifyUrl }),
+      html,
     });
   }
 
@@ -34,10 +41,23 @@ export class EmailService {
     token: string,
   ): Promise<void> {
     const resetUrl = `${config.frontendUrl}/auth/reset-password?token=${token}`;
+    
+    // Render the email body
+    const bodyHtml = renderEmailTemplate("password-reset", { resetUrl });
+    
+    // Render the full layout
+    const html = renderEmailTemplate("layout", {
+      title: "Reset your password",
+      preheader: "Use this link to reset your StellarMarket password.",
+      bodyHtml,
+      actionUrl: resetUrl,
+      actionLabel: "Reset password",
+    });
+    
     await this.sendHtml({
       to,
       subject: "Reset Your Password - StellarMarket",
-      html: renderPasswordResetEmail({ resetUrl }),
+      html,
     });
   }
 
@@ -56,25 +76,55 @@ export class EmailService {
   }): Promise<void> {
     const { to, event, title, message, outcome, actionUrl } = params;
 
-    const html = (() => {
-      switch (event) {
-        case "dispute.opened":
-          return renderDisputeOpenedEmail({ title, message, actionUrl });
-        case "dispute.resolved":
-          return renderDisputeResolvedEmail({
-            title,
-            message,
-            outcome,
-            actionUrl,
-          });
-        case "milestone.approved":
-          return renderMilestoneApprovedEmail({ title, message, actionUrl });
-        case "payment.released":
-          return renderPaymentReleasedEmail({ title, message, actionUrl });
-        case "application.accepted":
-          return renderApplicationAcceptedEmail({ title, message, actionUrl });
-      }
-    })();
+    let bodyHtml: string;
+    let preheader: string;
+    let actionLabel: string | undefined;
+
+    switch (event) {
+      case "dispute.opened":
+        bodyHtml = renderEmailTemplate("dispute-opened", { message, actionUrl });
+        preheader = "A dispute was opened on your job.";
+        actionLabel = actionUrl ? "View dispute" : undefined;
+        break;
+      case "dispute.resolved":
+        const outcomeText =
+          outcome === "CLIENT"
+            ? "The dispute was resolved in favor of the client."
+            : outcome === "FREELANCER"
+              ? "The dispute was resolved in favor of the freelancer."
+              : "The dispute has been resolved.";
+        bodyHtml = renderEmailTemplate("dispute-resolved", {
+          message,
+          outcomeText,
+          actionUrl,
+        });
+        preheader = "Your dispute has been resolved.";
+        actionLabel = actionUrl ? "View job details" : undefined;
+        break;
+      case "milestone.approved":
+        bodyHtml = renderEmailTemplate("milestone-approved", { message, actionUrl });
+        preheader = "A milestone was approved.";
+        actionLabel = actionUrl ? "View job" : undefined;
+        break;
+      case "payment.released":
+        bodyHtml = renderEmailTemplate("payment-released", { message, actionUrl });
+        preheader = "A payment was released to you.";
+        actionLabel = actionUrl ? "View details" : undefined;
+        break;
+      case "application.accepted":
+        bodyHtml = renderEmailTemplate("application-accepted", { message, actionUrl });
+        preheader = "Your application was accepted.";
+        actionLabel = actionUrl ? "Open StellarMarket" : undefined;
+        break;
+    }
+
+    const html = renderEmailTemplate("layout", {
+      title,
+      preheader,
+      bodyHtml,
+      actionUrl,
+      actionLabel,
+    });
 
     const subjectPrefix = "StellarMarket";
     await this.sendHtml({

@@ -30,7 +30,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { buildSeries, type WeeklyEarning } from "./earnings/earnings-utils";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 interface EarningsSummary {
   totalEarned: number;

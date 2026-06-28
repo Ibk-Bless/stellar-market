@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { X } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const SUGGESTION_DEBOUNCE_MS = 200;
 
 interface SkillSuggestion {

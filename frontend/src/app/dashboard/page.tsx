@@ -40,7 +40,7 @@ import { useSocket } from "@/context/SocketContext";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { Job, Application, PaginatedResponse } from "@/types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 interface DashboardStats {
   postedJobs: number;

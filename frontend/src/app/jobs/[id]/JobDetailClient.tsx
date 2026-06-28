@@ -45,7 +45,7 @@ import WalletAddress from "@/components/WalletAddress";
 import ApproveMilestoneModal from "@/components/ApproveMilestoneModal";
 
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 function stroopsToXlm(stroops: string): number {
   try {

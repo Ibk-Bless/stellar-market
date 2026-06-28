@@ -24,7 +24,7 @@ export default function InboxPage() {
         if (!token) return;
         setLoading(true);
         const response = await axios.get(
-          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/messages`,
+          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1"}/messages`,
           {
             headers: { Authorization: `Bearer ${token}` },
           },

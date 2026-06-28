@@ -16,6 +16,10 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL,
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:3000",
   encryptionKey: process.env.ENCRYPTION_KEY || "",
+  corsAllowedOrigins: (process.env.CORS_ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   // The minimum is kept server-side so clients cannot create zero-value jobs
   // by bypassing the posting form.
   platformMinBudgetXlm,

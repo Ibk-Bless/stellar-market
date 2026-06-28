@@ -6,7 +6,7 @@ import axios, { AxiosError } from "axios";
 import { Job } from "@/types";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 type ReviewModalProps = {
   job: Job;

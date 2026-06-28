@@ -719,7 +719,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (!address) {
       return { success: false, error: "No wallet connected. Connect a wallet first." };
     }
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
     try {
       // Step 1 — fetch a one-time challenge from the server
       const challengeRes = await fetch(`${API}/auth/wallet/challenge`, {

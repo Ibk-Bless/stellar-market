@@ -2,7 +2,7 @@ import { Metadata } from "next";
 import { generateJobMetadata } from "@/components/SEOMetadata";
 import JobDetailClient from "./JobDetailClient";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 async function getJob(id: string) {
   try {

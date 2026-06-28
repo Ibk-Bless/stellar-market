@@ -5,7 +5,7 @@ import axios from "axios";
 import { useAuth } from "@/context/AuthContext";
 import { Job, PaginatedResponse } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const LOCAL_STORAGE_KEY = "stellarmarket_saved_jobs";
 
 function readLocalSavedJobs(): Job[] {

@@ -31,7 +31,7 @@ import WalletAddress from "@/components/WalletAddress";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import InviteToJobModal from "@/components/InviteToJobModal";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 // Base URL without /api for serving static files
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 

@@ -15,7 +15,7 @@ import axios from "axios";
 import type { DisputeEvidence, EvidenceVerification } from "@/types";
 import LocalTimestamp from "@/components/LocalTimestamp";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 type EvidenceViewerProps = {
   disputeId: string;

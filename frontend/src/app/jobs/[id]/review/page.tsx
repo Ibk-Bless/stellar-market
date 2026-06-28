@@ -9,7 +9,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import ReviewModal from "@/components/ReviewModal";
 import { Job, PaginatedResponse, Review } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 export default function JobReviewPage() {
   const { id } = useParams();

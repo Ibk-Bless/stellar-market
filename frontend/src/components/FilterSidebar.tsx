@@ -81,7 +81,7 @@ export default function FilterSidebar({
   useEffect(() => {
     const fetchCategories = async () => {
       try {
-        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
         const response = await axios.get<string[]>(`${API_URL}/categories`);
         setCategories(response.data);
       } catch (error) {

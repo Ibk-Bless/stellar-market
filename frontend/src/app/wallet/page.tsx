@@ -20,7 +20,7 @@ import { useDelay } from "@/hooks/useDelay";
 import { useAuth } from "@/context/AuthContext";
 import { useWallet } from "@/context/WalletContext";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const STELLAR_EXPERT_BASE = "https://stellar.expert/explorer/testnet/tx";
 
 type Direction = "incoming" | "outgoing" | "all";
