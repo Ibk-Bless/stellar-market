@@ -91,14 +91,36 @@ initSocket(httpServer);
 // Attach Yjs WebSocket server (milestone negotiation rooms)
 initYjsServer(httpServer);
 
+const isDevelopment =
+  process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+
 const corsOptions: cors.CorsOptions = {
+  credentials: true,
   origin: (origin, callback) => {
-    if (!origin || origin === config.frontendUrl) {
-      callback(null, true);
-      return;
+    // Allow requests with no Origin header (same-origin, curl, Postman)
+    if (!origin) {
+      return callback(null, true);
     }
 
-    callback(new Error("Not allowed by CORS"));
+    // In development: allow any localhost origin dynamically
+    if (isDevelopment && /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+      return callback(null, true);
+    }
+
+    // Check against the explicit allowlist
+    if (config.corsAllowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Reject — log at warn level with CORS_REJECTED marker
+    logger.warn(
+      { origin, allowedOrigins: config.corsAllowedOrigins },
+      "CORS_REJECTED",
+    );
+    // Return null (no CORS headers) rather than an error object —
+    // the browser will block the request; we do not send a 403 response
+    // body for preflight requests as that breaks the CORS protocol.
+    return callback(null, false);
   },
 };
 
