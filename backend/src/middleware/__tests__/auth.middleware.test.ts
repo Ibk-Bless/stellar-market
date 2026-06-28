@@ -81,4 +81,27 @@ describe("authenticate middleware", () => {
     });
     expect(next).not.toHaveBeenCalled();
   });
+
+  it("returns 401 with ACCOUNT_DELETED for a soft-deleted user", async () => {
+    const req = {
+      headers: { authorization: "Bearer valid.token" },
+      path: "/dashboard",
+    } as AuthRequest;
+
+    (jwt.verify as jest.Mock).mockReturnValue({ userId: "deleted-user" });
+    prismaMock.user.findUnique.mockResolvedValue({
+      role: UserRole.CLIENT,
+      emailVerified: true,
+      deletedAt: new Date("2025-01-01"),
+    });
+
+    await authenticate(req, res, next);
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith({
+      error: "Account deleted.",
+      code: "ACCOUNT_DELETED",
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
 });

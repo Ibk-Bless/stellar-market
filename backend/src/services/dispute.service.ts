@@ -464,14 +464,14 @@ export class DisputeService {
    * Get disputes with filtering and pagination
    */
   static async getDisputes(
-    filters: { status?: DisputeStatus },
+    filters: { status?: DisputeStatus; userFilter?: Record<string, unknown> },
     pagination: { page: number; limit: number },
   ) {
-    const { status } = filters;
+    const { status, userFilter } = filters;
     const { page, limit } = pagination;
     const skip = (page - 1) * limit;
 
-    const where = status ? { status } : {};
+    const where = { ...(status ? { status } : {}), ...userFilter };
 
     const [disputes, total] = await Promise.all([
       prisma.dispute.findMany({

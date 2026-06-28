@@ -80,7 +80,8 @@ router.get(
 
 /**
  * GET /api/disputes
- * Get all disputes with optional filtering and pagination
+ * Get disputes scoped to the requesting user's role.
+ * Freelancers see their own disputes; clients see theirs; admins see all.
  */
 router.get(
   "/",
@@ -88,9 +89,24 @@ router.get(
   validate({ query: queryDisputesSchema }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const query = req.query as unknown as { page: number; limit: number };
+    const userId = req.userId!;
+    const role = req.userRole;
+
+    let userFilter: Record<string, unknown> | undefined;
+
+    if (role === UserRole.FREELANCER) {
+      userFilter = { freelancerId: userId };
+    } else if (role === UserRole.CLIENT) {
+      userFilter = { clientId: userId };
+    } else if (role === UserRole.ADMIN) {
+      userFilter = undefined;
+    } else {
+      res.status(403).json({ error: "Access denied." });
+      return;
+    }
 
     const result = await DisputeService.getDisputes(
-      { status: DisputeStatus.OPEN },
+      { status: DisputeStatus.OPEN, userFilter },
       { page: query.page, limit: query.limit },
     );
 

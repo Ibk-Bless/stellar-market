@@ -61,6 +61,24 @@ router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
+// DELETE /api/users/me — soft-delete current authenticated user's account
+router.delete("/me", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.userId!;
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { deletedAt: new Date() },
+  });
+
+  // Revoke all refresh tokens so any stored sessions are invalidated
+  await prisma.refreshToken.updateMany({
+    where: { userId },
+    data: { revoked: true },
+  });
+
+  res.json({ message: "Account deleted." });
+}));
+
 // PUT /api/users/me — update current authenticated user's profile
 router.put(
   "/me",

@@ -47,11 +47,16 @@ export const authenticate = async (
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { role: true, emailVerified: true },
+      select: { role: true, emailVerified: true, deletedAt: true },
     });
 
     if (!user) {
       res.status(401).json({ error: "User not found." });
+      return;
+    }
+
+    if (user.deletedAt) {
+      res.status(401).json({ error: "Account deleted.", code: "ACCOUNT_DELETED" });
       return;
     }
 
@@ -108,11 +113,16 @@ export const requireAdmin = async (
     // Query database for user role
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { role: true },
+      select: { role: true, deletedAt: true },
     });
 
     if (!user) {
       res.status(401).json({ error: "User not found." });
+      return;
+    }
+
+    if (user.deletedAt) {
+      res.status(401).json({ error: "Account deleted.", code: "ACCOUNT_DELETED" });
       return;
     }
 
@@ -170,10 +180,10 @@ export const optionalAuthenticate = async (
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { role: true, emailVerified: true },
+      select: { role: true, emailVerified: true, deletedAt: true },
     });
 
-    if (!user) {
+    if (!user || user.deletedAt) {
       return next();
     }
 

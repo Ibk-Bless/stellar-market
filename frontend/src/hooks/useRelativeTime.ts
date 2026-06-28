@@ -16,7 +16,7 @@ export function getRelativeTime(date: Date): string {
   const abs = Math.abs(diff);
   for (const { unit, ms } of THRESHOLDS) {
     if (abs < ms || unit === "year") {
-      const divisors: Record<Intl.RelativeTimeFormatUnit, number> = {
+      const divisors: Record<string, number> = {
         second: 1_000,
         minute: 60_000,
         hour: 3_600_000,

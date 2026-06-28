@@ -92,6 +92,13 @@ enum NotificationType {
   NEW_MESSAGE
   BADGE_AWARDED
   ESCROW_TTL_WARNING
+  JOB_INVITATION
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
 }
 
 enum BadgeTier {
@@ -128,6 +135,7 @@ model User {
   isSuspended            Boolean   @default(false)
   suspendReason          String?
   suspendedAt            DateTime?
+  deletedAt              DateTime?
   isSuspiciousReporter   Boolean   @default(false)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
@@ -140,6 +148,8 @@ model User {
   freelancerJobs     Job[]          @relation("FreelancerJobs")
   services           Service[]      @relation("FreelancerServices")
   applications       Application[]
+  invitationsReceived Invitation[]  @relation("InvitationsReceived")
+  invitationsSent     Invitation[]  @relation("InvitationsSent")
   sentMessages       Message[]      @relation("SentMessages")
   receivedMessages   Message[]      @relation("ReceivedMessages")
   reviewsGiven       Review[]       @relation("ReviewsGiven")
@@ -209,6 +219,7 @@ model Job {
   freelancer   User?         @relation("FreelancerJobs", fields: [freelancerId], references: [id])
   milestones   Milestone[]
   applications Application[]
+  invitations  Invitation[]
   messages     Message[]
   reviews      Review[]
   transactions Transaction[]
@@ -281,6 +292,23 @@ model Application {
   freelancer User @relation(fields: [freelancerId], references: [id])
 
   @@unique([jobId, freelancerId])
+}
+
+model Invitation {
+  id           String           @id @default(cuid())
+  jobId        String
+  freelancerId String
+  clientId     String
+  message      String?
+  status       InvitationStatus @default(PENDING)
+  createdAt    DateTime         @default(now())
+
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  freelancer User @relation("InvitationsReceived", fields: [freelancerId], references: [id], onDelete: Cascade)
+  client     User @relation("InvitationsSent", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, freelancerId])
+  @@index([freelancerId, createdAt(sort: Desc)])
 }
 
 model Message {

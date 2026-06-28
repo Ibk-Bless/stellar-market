@@ -104,9 +104,22 @@ describe("Earnings page preset shortcuts", () => {
     mockedAxios.get.mockClear();
     fireEvent.click(screen.getByTestId("preset-all_time"));
 
-    await waitFor(() => expect(mockedAxios.get).toHaveBeenCalled());
+    // Switching presets can leave a couple of stale in-flight requests from the
+    // previous range, so assert on the most recent earnings request rather than
+    // the first one recorded.
+    await waitFor(() => {
+      const latest = mockedAxios.get.mock.calls
+        .map((c) => c[0] as string)
+        .filter((u) => u.includes("/earnings?"))
+        .at(-1);
+      expect(latest).toBeDefined();
+      expect(latest).not.toMatch(/from=/);
+    });
 
-    const url: string = mockedAxios.get.mock.calls[0][0] as string;
+    const url = mockedAxios.get.mock.calls
+      .map((c) => c[0] as string)
+      .filter((u) => u.includes("/earnings?"))
+      .at(-1)!;
     expect(url).not.toMatch(/from=/);
     expect(url).not.toMatch(/to=/);
   });

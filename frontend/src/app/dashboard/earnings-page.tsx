@@ -27,6 +27,7 @@ import {
 import axios from "axios";
 import StatusBadge from "@/components/StatusBadge";
 import { useAuth } from "@/context/AuthContext";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { buildSeries, type WeeklyEarning } from "./earnings/earnings-utils";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
@@ -164,6 +165,10 @@ const EarningsPage = () => {
   const [error, setError] = useState<string | null>(null);
 
   const range = useMemo(() => resolveRange(preset), [preset]);
+
+  // Below 375px (budget Android devices) we shrink bars and drop the legend to
+  // avoid clutter while keeping the moving-average line readable.
+  const isNarrow = useMediaQuery("(max-width: 374px)");
 
   const fetchEarnings = useCallback(async () => {
     if (!user) return;
@@ -429,40 +434,40 @@ const EarningsPage = () => {
           <h2 className="text-theme-heading text-lg font-semibold mb-4">
             Earnings Over Time
           </h2>
-          <div className="overflow-x-auto -mx-4 sm:mx-0">
-            <div className="min-w-[500px] px-4 sm:px-0">
-              <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={series}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="label" />
-                  <YAxis />
-                  <Tooltip
-                    formatter={(value) => formatCurrency(Number(value))}
-                    contentStyle={{
-                      backgroundColor: "#1e293b",
-                      border: "1px solid #475569",
-                      borderRadius: "8px",
-                      color: "#f1f5f9",
-                    }}
-                  />
-                  <Legend />
-                  <Bar
-                    dataKey="earnings"
-                    name="Weekly earnings"
-                    fill="#10b981"
-                    radius={[4, 4, 0, 0]}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="movingAvg"
-                    name="30-day moving avg"
-                    stroke="#6366f1"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
+          <div data-testid="earnings-chart-wrapper" className="w-full">
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="label" />
+                <YAxis width={isNarrow ? 32 : 60} />
+                <Tooltip
+                  formatter={(value) => formatCurrency(Number(value))}
+                  contentStyle={{
+                    backgroundColor: "#1e293b",
+                    border: "1px solid #475569",
+                    borderRadius: "8px",
+                    color: "#f1f5f9",
+                  }}
+                />
+                {!isNarrow && <Legend />}
+                <Bar
+                  dataKey="earnings"
+                  name="Weekly earnings"
+                  fill="#10b981"
+                  radius={[4, 4, 0, 0]}
+                  barSize={isNarrow ? 10 : undefined}
+                  maxBarSize={isNarrow ? 12 : 40}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="movingAvg"
+                  name="30-day moving avg"
+                  stroke="#6366f1"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
           </div>
         </div>
       )}

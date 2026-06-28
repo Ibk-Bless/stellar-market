@@ -130,7 +130,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const pendingDisconnectResolve = useRef<((value: string | null) => void) | null>(null);
   const switchingToProvider = useRef<WalletProviderType | null>(null);
 
-  const balanceRefreshInterval = useRef<NodeJS.Timeout | null>(null);
   const sessionTimeoutId = useRef<NodeJS.Timeout | null>(null);
   const sessionWarningId = useRef<NodeJS.Timeout | null>(null);
   const sessionCheckInterval = useRef<NodeJS.Timeout | null>(null);
@@ -401,20 +400,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     restoreSession();
   }, [restoreSession]);
 
-  // Fetch balance when address changes
+  // Fetch balance when the connected address changes. We intentionally avoid a
+  // fixed polling interval here (which fired even when the tab was idle and was
+  // the source of redundant Horizon calls); the header balance is kept fresh by
+  // the cached useWalletBalance hook (30s stale-time + refetch-on-focus), and
+  // other consumers refresh explicitly via refreshBalance after transactions.
   useEffect(() => {
     if (address) {
       refreshBalance();
-      balanceRefreshInterval.current = setInterval(refreshBalance, 30000);
     } else {
       setBalance(null);
       setBalances([]);
     }
-    return () => {
-      if (balanceRefreshInterval.current) {
-        clearInterval(balanceRefreshInterval.current);
-      }
-    };
   }, [address, refreshBalance]);
 
   // Listen for Freighter account changes

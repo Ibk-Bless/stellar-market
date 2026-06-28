@@ -126,7 +126,7 @@ export default function JobDetailClient() {
     queryKey: ["application", id, user?.id],
     queryFn: async () => {
       const token = localStorage.getItem("token");
-      if (!token) return { applied: false, appId: null };
+      if (!token || !user) return { applied: false, appId: null };
       try {
         const res = await axios.get<PaginatedResponse<Application>>(`${API_URL}/applications`, {
           params: { jobId: id, freelancerId: user.id, limit: 1 },
