@@ -15,7 +15,7 @@ import {
 import { useState } from "react";
 import ShareMenu from "@/components/ShareMenu";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 
 type Review = {

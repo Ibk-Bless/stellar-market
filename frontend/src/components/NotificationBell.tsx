@@ -11,7 +11,7 @@ import { useFocusTrap } from "@/hooks/useFocusTrap";
 import NotificationItem from "@/components/NotificationItem";
 import { Notification, PaginatedResponse } from "@/types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 // Shared channel name for cross-tab read-state synchronization.
 const BC_CHANNEL = "stellarmarket:notifications";

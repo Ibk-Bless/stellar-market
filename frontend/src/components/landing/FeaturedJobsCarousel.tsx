@@ -8,7 +8,7 @@ import JobCardSkeleton from "@/components/skeletons/JobCardSkeleton";
 import { Job, PaginatedResponse } from "@/types";
 import Link from "next/link";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 export default function FeaturedJobsCarousel() {
   const [jobs, setJobs] = useState<Job[]>([]);

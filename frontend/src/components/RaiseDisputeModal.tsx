@@ -7,7 +7,7 @@ import { useWallet } from "@/context/WalletContext";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { Job } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 const MAX_FILES = 5;
 const MAX_FILE_SIZE_MB = 10;

@@ -19,7 +19,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/Toast";
 import { JOB_CATEGORIES, JOB_SKILLS, PAYMENT_TOKENS } from "@/constants/jobs";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const PLATFORM_MIN_BUDGET_XLM = Number(
   process.env.NEXT_PUBLIC_PLATFORM_MIN_BUDGET_XLM || "1",
 );

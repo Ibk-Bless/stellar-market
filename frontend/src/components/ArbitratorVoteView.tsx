@@ -32,7 +32,7 @@ interface DisputeTally {
   }>;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 export default function ArbitratorVoteView({
   dispute,
@@ -282,7 +282,7 @@ export default function ArbitratorVoteView({
                 <a
                   href={
                     item.url
-                      ? `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace("/api", "")}${item.url}`
+                      ? `${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1").replace("/api", "")}${item.url}`
                       : item.ipfsHash
                         ? `https://ipfs.io/ipfs/${item.ipfsHash}`
                         : "#"

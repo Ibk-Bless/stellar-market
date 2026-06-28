@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { PortfolioItem } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 
 const PORTFOLIO_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];

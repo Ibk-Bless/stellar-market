@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import axios from "axios";
 import { Dispute } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 // Terminal statuses where polling should stop
 const TERMINAL_STATUSES = ["RESOLVED_CLIENT", "RESOLVED_FREELANCER", "ESCALATED"] as const;

@@ -39,7 +39,7 @@ export default function ChatThreadPage() {
       if (!token) return;
       setLoading(true);
       const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/messages?participantId=${otherUserId}${actualJobId ? `&jobId=${actualJobId}` : ""}`,
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1"}/messages?participantId=${otherUserId}${actualJobId ? `&jobId=${actualJobId}` : ""}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -59,7 +59,7 @@ export default function ChatThreadPage() {
       }
 
       await axios.get(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/messages/${otherUserId}${actualJobId ? `?jobId=${actualJobId}` : ""}`,
+        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1"}/messages/${otherUserId}${actualJobId ? `?jobId=${actualJobId}` : ""}`,
         {
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -128,7 +128,7 @@ export default function ChatThreadPage() {
         setNewMessage("");
       } else {
         const response = await axios.post(
-          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/messages`,
+          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1"}/messages`,
           {
             receiverId: otherUserId,
             jobId: actualJobId,

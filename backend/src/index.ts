@@ -21,6 +21,7 @@ import {
   stopHorizonListener,
 } from "./services/horizon-listener.service";
 import { installRequestIdConsolePatch, logger } from "./lib/logger";
+import { connectWithRetry } from "./lib/db-connect";
 import { getHealthStatus } from "./lib/health";
 import { RecommendationQueueService } from "./services/recommendation-queue.service";
 import { initializeVirusScanner } from "./utils/virusScanner";
@@ -163,15 +164,32 @@ app.use("/admin/queues", requireAdmin, bullBoardAdapter.getRouter());
 // Rate limiting (route-specific auth limiters are applied in auth router)
 
 // Write rate limiting (applied before routes for POST mutations)
-app.use("/api/jobs", writeRateLimiter);
-app.use("/api/reviews", writeRateLimiter);
-app.use("/api/disputes", writeRateLimiter);
+app.use("/api/v1/jobs", writeRateLimiter);
+app.use("/api/v1/reviews", writeRateLimiter);
+app.use("/api/v1/disputes", writeRateLimiter);
 
 // Global rate limiting (skip auth routes already limited)
-app.use("/api", globalRateLimiter);
+app.use("/api/v1", globalRateLimiter);
+
+// Add API version header to all versioned responses
+app.use("/api/v1", (_req, res, next) => {
+  res.setHeader("X-API-Version", "1");
+  next();
+});
+
+// Legacy /api/* redirect — clients have 6 months to migrate to /api/v1/*
+app.use("/api", (req, res, next) => {
+  if (req.path.startsWith("/v1")) {
+    return next();
+  }
+  const deprecationDate = new Date(Date.now() + 6 * 30 * 24 * 60 * 60 * 1000).toUTCString();
+  res.setHeader("Deprecation", `date="${deprecationDate}"`);
+  res.setHeader("Link", `</api/v1${req.path}>; rel="successor-version"`);
+  return res.redirect(301, `/api/v1${req.path}${req.search || ""}`);
+});
 
 // API routes
-app.use("/api", routes);
+app.use("/api/v1", routes);
 
 // 404 handler
 app.use((req, res) => {
@@ -185,7 +203,8 @@ app.use((req, res) => {
 // Error handler
 app.use(errorHandler);
 
-function startServer(): void {
+async function startServer(): Promise<void> {
+  await connectWithRetry(prisma);
   httpServer.listen(config.port, async () => {
     logger.info({ port: config.port }, "StellarMarket API running");
     startExpiryJob();
@@ -226,7 +245,10 @@ process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
 
 if (require.main === module) {
-  startServer();
+  startServer().catch((err) => {
+    logger.error({ err }, "Failed to start server");
+    process.exit(1);
+  });
 }
 
 export { app, httpServer, startServer };
