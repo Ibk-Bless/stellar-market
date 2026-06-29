@@ -46,6 +46,57 @@ function escapeCsv(value: string | number | null | undefined): string {
 }
 
 /**
+ * GET /api/freelancers/me/stats
+ * Get quick dashboard statistics for the authenticated freelancer.
+ */
+router.get(
+  "/me/stats",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!user || user.role !== "FREELANCER") {
+      return res.status(403).json({ error: "Only freelancers can access stats" });
+    }
+
+    const wallet = user.walletAddress;
+
+    let totalEarnedXlm = 0;
+    if (wallet) {
+      const earnedAgg = await prisma.transaction.aggregate({
+        where: {
+          toAddress: wallet,
+          type: { in: ["RELEASE", "DISPUTE_PAYOUT"] },
+        },
+        _sum: { amount: true },
+      });
+      totalEarnedXlm = earnedAgg._sum?.amount ?? 0;
+    }
+
+    const completedJobs = await prisma.job.count({
+      where: {
+        freelancerId: user.id,
+        status: "COMPLETED",
+      },
+    });
+
+    const activeJobs = await prisma.job.count({
+      where: {
+        freelancerId: user.id,
+        status: "IN_PROGRESS",
+      },
+    });
+
+    res.json({
+      totalEarnedXlm,
+      completedJobs,
+      activeJobs,
+      averageRating: user.averageRating ?? 0,
+      reviewCount: user.reviewCount ?? 0,
+    });
+  }),
+);
+
+/**
  * GET /api/freelancers/me/saved-jobs
  * List saved jobs with pagination
  */
