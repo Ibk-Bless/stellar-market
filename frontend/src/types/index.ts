@@ -1,3 +1,15 @@
+export type ReputationTier = "None" | "Bronze" | "Silver" | "Gold" | "Platinum";
+
+export interface BadgeTier {
+  name: ReputationTier;
+  minScore: number;
+  colour: string;
+}
+
+export interface PlatformConfig {
+  badgeTiers: BadgeTier[];
+}
+
 export interface User {
   id: string;
   walletAddress?: string | null;
