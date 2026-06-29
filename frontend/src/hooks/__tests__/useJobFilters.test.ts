@@ -4,7 +4,7 @@ import {
   type JobFilters,
 } from "@/hooks/useJobFilters";
 
-describe("job filter URL sync (#544)", () => {
+describe("job filter URL sync (#815)", () => {
   describe("parseFiltersFromParams", () => {
     it("returns defaults for empty params", () => {
       expect(parseFiltersFromParams(new URLSearchParams())).toEqual({
@@ -87,7 +87,7 @@ describe("job filter URL sync (#544)", () => {
   it("round-trips parse(serialize(filters))", () => {
     const filters: JobFilters = {
       search: "audit",
-      category: "Smart Contracts",
+      category: "Smart Contract",
       skills: ["rust", "soroban"],
       status: ["open"],
       minBudget: "50",
@@ -97,5 +97,48 @@ describe("job filter URL sync (#544)", () => {
       page: 4,
     };
     expect(parseFiltersFromParams(filtersToParams(filters))).toEqual(filters);
+  });
+
+  describe("category slug encoding (#815)", () => {
+    const defaults: JobFilters = {
+      search: "",
+      category: "All",
+      skills: [],
+      status: [],
+      minBudget: "",
+      maxBudget: "",
+      postedDate: "all",
+      sort: "newest",
+      page: 1,
+    };
+
+    it("selecting Smart Contract updates URL to ?category=smart-contract", () => {
+      const params = filtersToParams({ ...defaults, category: "Smart Contract" });
+      expect(params.get("category")).toBe("smart-contract");
+    });
+
+    it("loading ?category=smart-contract&min=500 initialises filters correctly", () => {
+      const f = parseFiltersFromParams(
+        new URLSearchParams("category=smart-contract&min=500"),
+      );
+      expect(f.category).toBe("Smart Contract");
+      expect(f.minBudget).toBe("500");
+    });
+
+    it("encodes all canonical categories as slugs", () => {
+      const cases: [string, string][] = [
+        ["Frontend", "frontend"],
+        ["Backend", "backend"],
+        ["Smart Contract", "smart-contract"],
+        ["Design", "design"],
+        ["Mobile", "mobile"],
+        ["Documentation", "documentation"],
+        ["DevOps", "devops"],
+      ];
+      for (const [name, slug] of cases) {
+        const params = filtersToParams({ ...defaults, category: name });
+        expect(params.get("category")).toBe(slug);
+      }
+    });
   });
 });

@@ -3,6 +3,31 @@
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
+const CANONICAL_CATEGORIES = [
+  "Frontend",
+  "Backend",
+  "Smart Contract",
+  "Design",
+  "Mobile",
+  "Documentation",
+  "DevOps",
+];
+
+function categoryToSlug(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, "-");
+}
+
+function slugToCanonical(slug: string): string {
+  const fromSlug = CANONICAL_CATEGORIES.find(
+    (c) => c.toLowerCase().replace(/\s+/g, "-") === slug.toLowerCase()
+  );
+  if (fromSlug) return fromSlug;
+  const exact = CANONICAL_CATEGORIES.find(
+    (c) => c.toLowerCase() === slug.toLowerCase()
+  );
+  return exact ?? slug;
+}
+
 export interface JobFilters {
   search: string;
   category: string;
@@ -34,7 +59,10 @@ export function parseFiltersFromParams(searchParams: URLSearchParams): JobFilter
 
   return {
     search: searchParams.get("q") || "",
-    category: searchParams.get("category") || "All",
+    category: (() => {
+      const raw = searchParams.get("category");
+      return raw ? slugToCanonical(raw) : "All";
+    })(),
     skills: skills ? skills.split(",") : [],
     status: status ? status.split(",") : [],
     minBudget: searchParams.get("min") || "",
@@ -48,7 +76,7 @@ export function parseFiltersFromParams(searchParams: URLSearchParams): JobFilter
 export function filtersToParams(filters: JobFilters): URLSearchParams {
   const params = new URLSearchParams();
   if (filters.search) params.set("q", filters.search);
-  if (filters.category !== "All") params.set("category", filters.category);
+  if (filters.category !== "All") params.set("category", categoryToSlug(filters.category));
   if (filters.skills.length) params.set("skills", filters.skills.join(","));
   if (filters.status.length) params.set("status", filters.status.join(","));
   if (filters.minBudget) params.set("min", filters.minBudget);
