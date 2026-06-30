@@ -8,14 +8,20 @@ import {
   rpc,
   scValToNative,
 } from "@stellar/stellar-sdk";
-
-export type ReputationTier = "None" | "Bronze" | "Silver" | "Gold" | "Platinum";
+import type { BadgeTier, ReputationTier } from "@/types";
 
 export type ReputationResult = {
   score: number;
   badgeTier: ReputationTier;
   reviewCount: number;
 };
+
+export const DEFAULT_BADGE_TIERS: BadgeTier[] = [
+  { name: "Bronze", minScore: 100, colour: "#CD7F32" },
+  { name: "Silver", minScore: 300, colour: "#C0C0C0" },
+  { name: "Gold", minScore: 500, colour: "#FFD700" },
+  { name: "Platinum", minScore: 700, colour: "#E5E4E2" },
+];
 
 const RPC_URL =
   process.env.NEXT_PUBLIC_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
@@ -25,11 +31,11 @@ const REPUTATION_CONTRACT_ID =
 
 const ESCROW_CONTRACT_ID = process.env.NEXT_PUBLIC_ESCROW_CONTRACT_ID || "";
 
-function getBadgeTier(averageRaw: number): ReputationTier {
-  if (averageRaw >= 700) return "Platinum";
-  if (averageRaw >= 500) return "Gold";
-  if (averageRaw >= 300) return "Silver";
-  if (averageRaw >= 100) return "Bronze";
+function getBadgeTier(averageRaw: number, tiers: BadgeTier[] = DEFAULT_BADGE_TIERS): ReputationTier {
+  const sorted = [...tiers].sort((a, b) => b.minScore - a.minScore);
+  for (const t of sorted) {
+    if (averageRaw >= t.minScore) return t.name;
+  }
   return "None";
 }
 
@@ -40,7 +46,7 @@ function toNumber(v: unknown): number {
   return 0;
 }
 
-function parse(native: unknown): ReputationResult | null {
+function parse(native: unknown, tiers?: BadgeTier[]): ReputationResult | null {
   if (!native || typeof native !== "object") return null;
 
   const r = native as Record<string, unknown>;
@@ -54,13 +60,13 @@ function parse(native: unknown): ReputationResult | null {
 
   return {
     score: avgRaw / 100,
-    badgeTier: getBadgeTier(avgRaw),
+    badgeTier: getBadgeTier(avgRaw, tiers),
     reviewCount,
   };
 }
 
 export class ContractService {
-  static async getReputation(address: string): Promise<ReputationResult | null> {
+  static async getReputation(address: string, tiers?: BadgeTier[]): Promise<ReputationResult | null> {
     if (!address || !REPUTATION_CONTRACT_ID) return null;
 
     const server = new rpc.Server(RPC_URL);
@@ -92,7 +98,7 @@ export class ContractService {
     if (!retval) return null;
 
     const native = scValToNative(retval);
-    return parse(native);
+    return parse(native, tiers);
   }
 
   static async buildSubmitReviewTx(params: {

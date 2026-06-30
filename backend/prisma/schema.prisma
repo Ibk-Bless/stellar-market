@@ -137,6 +137,10 @@ model User {
   suspendedAt            DateTime?
   deletedAt              DateTime?
   isSuspiciousReporter   Boolean   @default(false)
+  // Incremented on every password change so previously-issued JWTs (which embed
+  // the value at sign time) are rejected by the auth middleware on mismatch.
+  // Invalidates stolen tokens immediately after a password change (issue #787).
+  tokenVersion           Int       @default(0)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
   availability           Boolean   @default(true)
