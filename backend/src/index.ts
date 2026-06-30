@@ -24,6 +24,7 @@ import {
 import { installRequestIdConsolePatch, logger } from "./lib/logger";
 import { connectWithRetry } from "./lib/db-connect";
 import { getHealthStatus } from "./lib/health";
+import { metricsHandler, requestDurationMiddleware } from "./lib/metrics";
 import { RecommendationQueueService } from "./services/recommendation-queue.service";
 import { initializeVirusScanner } from "./utils/virusScanner";
 import { ReputationCacheService } from "./services/reputation-cache.service";
@@ -144,29 +145,15 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(sanitizeInput);
 
-// Compression — skip streaming endpoints
-app.use(compression({
-  threshold: 1024,
-  filter: (req, res) => {
-    if (req.path.includes("/transactions/export") ||
-        req.path.includes("/uploads/") ||
-        req.path.includes("/avatars/") ||
-        req.path.includes("/portfolio/files/")) {
-      return false;
-    }
-    return compression.filter(req, res);
-  },
-}));
-
-// Health check
+// Health check and metrics (excluded from rate limiting and auth)
 app.get("/health", async (_req, res) => {
   const health = await getHealthStatus(prisma);
-  const httpStatus = health.checks.database === "error" || health.checks.redis === "error"
-    ? 503
-    : 200;
-  res.status(httpStatus).json(health);
+  res.status(health.status === "ok" ? 200 : 503).json(health);
 });
 
+app.get("/metrics", metricsHandler);
+
+app.use(requestDurationMiddleware);
 // Metrics endpoint — exposes pool stats and process counters
 app.get("/metrics", (_req, res) => {
   res.json({
