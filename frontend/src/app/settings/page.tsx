@@ -8,6 +8,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/components/Toast";
 import WalletAddress from "@/components/WalletAddress";
+import SkillCombobox from "@/components/SkillCombobox";
+import { resizeImage, createImagePreview } from "@/utils/image";
 import {
   User,
   Settings,
@@ -31,7 +33,7 @@ import {
 } from "lucide-react";
 import { PortfolioItem } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 
 const PORTFOLIO_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
@@ -65,8 +67,10 @@ export default function SettingsPage() {
   const [role, setRole] = useState<"CLIENT" | "FREELANCER">(
     user?.role === "CLIENT" || user?.role === "FREELANCER" ? user.role : "FREELANCER",
   );
+  const [availabilityStatus, setAvailabilityStatus] = useState<"available" | "busy" | "unavailable">(
+    user?.availability === false ? "unavailable" : "available"
+  );
   const [skills, setSkills] = useState<string[]>(user?.skills ?? []);
-  const [newSkill, setNewSkill] = useState("");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string>("");
   const [errors, setErrors] = useState<FormErrors>({});
@@ -124,6 +128,7 @@ export default function SettingsPage() {
         setRole(data.role ?? "FREELANCER");
         setSkills(data.skills ?? []);
         setTwoFAEnabled(data.twoFactorEnabled ?? false);
+        setAvailabilityStatus(data.availability === false ? "unavailable" : "available");
         updateUser({
           walletAddress: data.walletAddress ?? null,
           email: data.email ?? undefined,
@@ -320,7 +325,7 @@ export default function SettingsPage() {
     return Object.keys(newErrors).length === 0;
   }
 
-  function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -334,12 +339,20 @@ export default function SettingsPage() {
       return;
     }
 
-    setAvatarFile(file);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setAvatarPreview(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const resizedFile = await resizeImage(file, {
+        maxWidth: 400,
+        maxHeight: 400,
+        quality: 0.85,
+        mimeType: file.type === "image/png" ? "image/png" : "image/jpeg",
+      });
+
+      setAvatarFile(resizedFile);
+      const preview = await createImagePreview(resizedFile);
+      setAvatarPreview(preview);
+    } catch (error) {
+      toast.error("Failed to process image. Please try another file.");
+    }
   }
 
   async function handleAvatarUpload() {
@@ -370,28 +383,6 @@ export default function SettingsPage() {
     }
   }
 
-  function addSkill() {
-    const trimmed = newSkill.trim();
-    if (!trimmed) return;
-
-    if (skills.includes(trimmed)) {
-      toast.error("Skill already added");
-      return;
-    }
-
-    if (skills.length >= 20) {
-      toast.error("Maximum 20 skills allowed");
-      return;
-    }
-
-    setSkills([...skills, trimmed]);
-    setNewSkill("");
-  }
-
-  function removeSkill(skill: string) {
-    setSkills(skills.filter((s) => s !== skill));
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) return;
@@ -404,6 +395,7 @@ export default function SettingsPage() {
         username,
         role,
         skills,
+        availability: availabilityStatus !== "unavailable",
       };
       if (email) payload.email = email;
       else payload.email = null;
@@ -809,51 +801,9 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-theme-heading mb-2">
                 Skills
               </label>
-              <div className="flex gap-2 mb-3">
-                <input
-                  type="text"
-                  value={newSkill}
-                  onChange={(e) => setNewSkill(e.target.value)}
-                  onKeyPress={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addSkill();
-                    }
-                  }}
-                  className="input-field flex-1"
-                  placeholder="Add a skill (e.g., React, Node.js)"
-                  maxLength={50}
-                />
-                <button
-                  type="button"
-                  onClick={addSkill}
-                  className="btn-secondary flex items-center gap-2 text-sm"
-                >
-                  <Plus size={16} />
-                  Add
-                </button>
-              </div>
-              {skills.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {skills.map((skill, idx) => (
-                    <span
-                      key={idx}
-                      className="px-3 py-1.5 bg-theme-card border border-theme-border rounded-full text-sm text-theme-text flex items-center gap-2"
-                    >
-                      {skill}
-                      <button
-                        type="button"
-                        onClick={() => removeSkill(skill)}
-                        className="text-theme-error hover:text-theme-error/80"
-                        aria-label={`Remove ${skill}`}
-                      >
-                        <X size={14} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-theme-text text-sm">No skills added yet</p>
+              <SkillCombobox skills={skills} onChange={setSkills} />
+              {skills.length === 0 && (
+                <p className="text-theme-text text-sm mt-3">No skills added yet</p>
               )}
               {errors.skills && (
                 <p className="text-theme-error text-xs mt-1">{errors.skills}</p>
@@ -892,6 +842,42 @@ export default function SettingsPage() {
                 </button>
               </div>
             </div>
+
+            {/* Availability Status (freelancers only) */}
+            {role === "FREELANCER" && (
+              <div>
+                <label className="block text-sm font-medium text-theme-heading mb-3">
+                  Availability Status
+                </label>
+                <div className="flex gap-3">
+                  {(["available", "busy", "unavailable"] as const).map((status) => {
+                    const config = {
+                      available: { label: "Available", active: "bg-green-500/20 border-green-500 text-green-600 dark:text-green-400" },
+                      busy: { label: "Busy", active: "bg-amber-400/20 border-amber-400 text-amber-600 dark:text-amber-400" },
+                      unavailable: { label: "Unavailable", active: "bg-gray-400/20 border-gray-400 text-gray-500" },
+                    }[status];
+                    return (
+                      <button
+                        key={status}
+                        type="button"
+                        onClick={() => setAvailabilityStatus(status)}
+                        className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-colors ${
+                          availabilityStatus === status
+                            ? config.active
+                            : "bg-theme-card border-theme-border text-theme-text hover:border-theme-text"
+                        }`}
+                        aria-pressed={availabilityStatus === status}
+                      >
+                        {config.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-theme-text mt-2">
+                  Clients can see your availability status on your profile and job applications.
+                </p>
+              </div>
+            )}
 
             {/* Submit */}
             <div className="flex justify-end pt-2">

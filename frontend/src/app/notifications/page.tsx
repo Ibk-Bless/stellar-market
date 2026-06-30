@@ -10,7 +10,7 @@ import NotificationItem from "@/components/NotificationItem";
 import Pagination from "@/components/Pagination";
 import EmptyState from "@/components/EmptyState";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 export default function NotificationsPage() {
   const { token, user } = useAuth();

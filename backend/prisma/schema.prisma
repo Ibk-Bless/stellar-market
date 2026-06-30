@@ -91,6 +91,14 @@ enum NotificationType {
   DISPUTE_RESOLVED
   NEW_MESSAGE
   BADGE_AWARDED
+  ESCROW_TTL_WARNING
+  JOB_INVITATION
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
 }
 
 enum BadgeTier {
@@ -127,7 +135,12 @@ model User {
   isSuspended            Boolean   @default(false)
   suspendReason          String?
   suspendedAt            DateTime?
+  deletedAt              DateTime?
   isSuspiciousReporter   Boolean   @default(false)
+  // Incremented on every password change so previously-issued JWTs (which embed
+  // the value at sign time) are rejected by the auth middleware on mismatch.
+  // Invalidates stolen tokens immediately after a password change (issue #787).
+  tokenVersion           Int       @default(0)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
   availability           Boolean   @default(true)
@@ -139,6 +152,8 @@ model User {
   freelancerJobs     Job[]          @relation("FreelancerJobs")
   services           Service[]      @relation("FreelancerServices")
   applications       Application[]
+  invitationsReceived Invitation[]  @relation("InvitationsReceived")
+  invitationsSent     Invitation[]  @relation("InvitationsSent")
   sentMessages       Message[]      @relation("SentMessages")
   receivedMessages   Message[]      @relation("ReceivedMessages")
   reviewsGiven       Review[]       @relation("ReviewsGiven")
@@ -147,7 +162,8 @@ model User {
   transactionsFrom   Transaction[]  @relation("TransactionsFrom")
   transactionsTo     Transaction[]  @relation("TransactionsTo")
   attachments        Attachment[]
-  notifications      Notification[]
+  notifications        Notification[]
+  pendingNotifications PendingNotification[]
   auditLogs          AuditLog[]
   initiatedDisputes  Dispute[]      @relation("DisputeInitiated")
   clientDisputes     Dispute[]      @relation("DisputeClient")
@@ -159,6 +175,7 @@ model User {
   notificationPreference NotificationPreference?
   portfolioItems     PortfolioItem[]
   webhooks           Webhook[]
+  pushSubscriptions  PushSubscription[] @relation("UserPushSubscriptions")
 
   referralCode       String?   @unique
   referredById       String?
@@ -206,6 +223,7 @@ model Job {
   freelancer   User?         @relation("FreelancerJobs", fields: [freelancerId], references: [id])
   milestones   Milestone[]
   applications Application[]
+  invitations  Invitation[]
   messages     Message[]
   reviews      Review[]
   transactions Transaction[]
@@ -280,6 +298,23 @@ model Application {
   @@unique([jobId, freelancerId])
 }
 
+model Invitation {
+  id           String           @id @default(cuid())
+  jobId        String
+  freelancerId String
+  clientId     String
+  message      String?
+  status       InvitationStatus @default(PENDING)
+  createdAt    DateTime         @default(now())
+
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  freelancer User @relation("InvitationsReceived", fields: [freelancerId], references: [id], onDelete: Cascade)
+  client     User @relation("InvitationsSent", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, freelancerId])
+  @@index([freelancerId, createdAt(sort: Desc)])
+}
+
 model Message {
   id         String   @id @default(cuid())
   senderId   String
@@ -351,6 +386,8 @@ model Attachment {
   mimeType     String
   size         Int
   url          String
+  sha256       String?
+  anchorTxHash String?
   createdAt    DateTime  @default(now())
 
   uploader  User       @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
@@ -372,12 +409,29 @@ model Notification {
   title     String
   message   String
   read      Boolean          @default(false)
+  status    String           @default("pending") // "pending" | "sent" | "failed"
+  deliveredAt DateTime?
   metadata  Json?
   createdAt DateTime         @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pendingNotification PendingNotification?
 
   @@index([userId, createdAt(sort: Desc)])
+}
+
+model PendingNotification {
+  id             String       @id @default(cuid())
+  userId         String
+  notificationId String       @unique
+  priority       Int          @default(3)
+  deliveredAt    DateTime?
+  createdAt      DateTime     @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deliveredAt, priority])
 }
 
 model AuditLog {
@@ -624,4 +678,49 @@ model EscrowEvent {
 
   @@unique([contractJobId, eventType, ledgerSeq])
   @@index([jobId, ledgerSeq])
+}
+
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  createdAt  DateTime @default(now())
+
+  user User @relation("UserPushSubscriptions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model HorizonCursor {
+  id        Int      @id @default(1)
+  cursor    String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("horizon_cursor")
+}
+
+model HorizonDlq {
+  id         Int       @id @default(autoincrement())
+  cursor     String
+  payload    Json
+  error      String
+  attempt    Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  replayedAt DateTime? @map("replayed_at")
+
+  @@index([replayedAt])
+  @@index([cursor])
+  @@map("horizon_dlq")
+}
+
+model Skill {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  category  String?
+  aliases   String[]
+  createdAt DateTime @default(now())
+
+  @@index([name])
 }

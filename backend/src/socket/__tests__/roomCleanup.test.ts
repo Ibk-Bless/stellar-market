@@ -1,3 +1,22 @@
+// ─── Notification queue mock (avoids Redis connection at module load) ─────────
+jest.mock("../../lib/notification-queue", () => ({
+  startNotificationWorker: jest.fn(),
+  stopNotificationWorker: jest.fn().mockResolvedValue(undefined),
+  notificationQueue: { add: jest.fn() },
+  getNotificationPriority: jest.fn().mockReturnValue(4),
+}));
+
+// ─── Prisma mock ─────────────────────────────────────────────────────────────
+jest.mock("@prisma/client", () => {
+  const mockPrisma = {
+    pendingNotification: {
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn(),
+    },
+  };
+  return { PrismaClient: jest.fn(() => mockPrisma) };
+});
+
 import { createServer } from "http";
 import { Server as SocketServer } from "socket.io";
 import ioc from "socket.io-client";

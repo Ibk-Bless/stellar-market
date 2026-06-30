@@ -1,67 +1,91 @@
-#533 Refactor dispute state transitions with explicit error codes
+#604 Add notification centre with bell icon and read/unread state
 Repo Avatar
 stellarmarket-labs/stellar-market
 Overview
-The dispute contract uses generic panics in several places. Replace all panics with typed ContractError variants to improve debuggability and allow the frontend to display meaningful error messages.
+Users receive no in-app notifications. Add a bell icon in the navbar that shows a badge count and a dropdown list of recent notifications.
 
 Requirements
-Define DisputeError enum covering all failure modes
-Replace all panic! and unwrap() calls in non-test code
-Return Result from all public functions
-Map error codes to human-readable strings in docs/errors.md
+Notification types: new job application, milestone released, dispute opened, message received, review posted
+Bell icon badge shows unread count (capped at 99+)
+Dropdown shows last 20 notifications with timestamp and action link
+Mark-all-as-read button
+Clicking a notification marks it read and navigates to the relevant page
+Poll GET /notifications?unread=true every 30 s (upgrade to WebSocket in a follow-up)
 Acceptance Criteria
-No panic! or unwrap() in src/ (only tests)
-All error variants documented
-Error codes stable across contract upgrades
-Tests assert specific error variants on failure paths
+Badge disappears after all notifications are read
+Notifications older than 30 days not shown
+Accessible: dropdown traps focus and closes on Escape
 
-#534 Implement reputation score decay over time
+#740 Freelancer profile page has no 'Request to Hire' CTA when viewed by a client — conversion path is missing
 Repo Avatar
 stellarmarket-labs/stellar-market
-Overview
-Reputation scores should decay gradually for inactive users to prevent early adopters from having a permanent advantage and to keep scores reflecting recent activity.
 
-Requirements
-Apply a decay factor (e.g., 1% per 30 days) to scores not updated within a threshold
-Decay is computed lazily on next score read/write (not a cron)
-Store last_updated_ledger: u32 alongside each score
-Decay formula: new_score = score \* decay_rate ^ periods_elapsed
+Problem
+A client browsing a freelancer profile has no direct action to initiate hiring. The profile page is read-only with no CTA. Clients must navigate away to job posting and manually enter the freelancer details, creating unnecessary friction and drop-off.
+
+Root Cause
+The freelancer profile page was built for public viewing with no role-aware CTAs.
+
+Required Changes
+Frontend
+Detect viewer role from auth context.
+If the viewer is a client and the profile belongs to a freelancer, show a "Invite to Job" button.
+Clicking "Invite to Job" opens a modal to select an existing open job (from the client job list) to invite the freelancer to, or a link to post a new job.
+The invitation is recorded as POST /jobs/:id/invitations { freelancerId } and shown in the freelancer notification centre.
+Backend
+Add POST /jobs/:id/invitations and GET /jobs/:id/invitations (client-only). Store in an Invitation model.
+
+Tests
+Client viewer sees "Invite to Job" button.
+Freelancer viewer does not see the button.
+Invitation is created successfully via the modal.
 Acceptance Criteria
-Decay computed correctly using integer math (no floats)
-last_updated_ledger updated on every score change
-Test with 0 elapsed periods (no decay), 1 period, 10 periods
-Decay rate configurable by admin
+Client sees "Invite to Job" CTA on freelancer profiles
+Non-client viewers do not see the CTA
+Invitation is persisted and appears in freelancer notifications
 
-#535 Add skill endorsement system to reputation contract
+#742 Wallet balance is fetched on every dashboard render — no caching causes redundant Horizon calls
 Repo Avatar
 stellarmarket-labs/stellar-market
-Overview
-Users should be able to endorse each other for specific skills (e.g., "Rust", "Smart Contracts", "UI Design"). Endorsements contribute to a skill-specific reputation breakdown.
+Problem
+The dashboard header fetches the connected wallet XLM balance from Horizon on every render via freighter.getBalance() or a direct Horizon account call. This results in multiple Horizon calls per minute during active sessions, adding latency and contributing to rate-limit risk.
 
-Requirements
-Store Map> of endorsers per skill per user
-Add endorse(target: Address, skill: String) — one endorsement per (endorser, skill, target) triple
-Add get_skill_score(user: Address, skill: String) -> u32 view function
-Endorsements from high-reputation users should carry more weight
+Root Cause
+Balance is fetched in a useEffect with no cache or stale-time configuration.
+
+Required Changes
+Frontend
+Move balance fetching into a TanStack Query hook useWalletBalance with staleTime: 30_000 (30 seconds).
+Refresh on window focus if the cached value is older than 30 seconds.
+Show the cached balance immediately while a background refresh is in progress.
+Display a subtle "↻" icon while refreshing.
+Tests
+Balance is served from cache on second mount within 30 seconds.
+Window focus triggers a background refresh after 30 seconds.
 Acceptance Criteria
-Duplicate endorsement prevention (same endorser, skill, target)
-Weighted endorsement calculation
-Skill score view function returns correct value
-Tests for endorsement, duplicate rejection, weight calculation
+Balance is not re-fetched more than once per 30 seconds per session
+Stale balance is shown immediately while refreshing
+Background refresh indicator is visible
 
-#536 Implement stake-weighted reputation scoring
+#744 Recharts earnings chart is not responsive on screen widths below 375px — chart overflows on small Android devices
 Repo Avatar
 stellarmarket-labs/stellar-market
-Overview
-Reputation scores should factor in how much a user has staked in the system. Higher stake = higher trust = higher score multiplier.
+Problem
+The ComposedChart in the earnings dashboard uses a fixed width prop. On screens narrower than 375px (common on budget Android devices), the chart overflows its container and creates a horizontal scroll on the dashboard.
 
-Requirements
-Query staked balance from a staking contract (or store locally)
-Apply a multiplier based on stake tier (e.g., <100 XLM: 1x, 100-1000 XLM: 1.2x, >1000 XLM: 1.5x)
-Score = base_score \* stake_multiplier
-Tiers configurable by admin
+Root Cause
+width={600} is hardcoded on the ComposedChart component instead of using ResponsiveContainer.
+
+Required Changes
+Frontend
+Wrap the ComposedChart in .
+Remove the hardcoded width prop.
+On screens < 375px, reduce bar size and hide the moving average line label to avoid clutter.
+Verify on Chrome DevTools device emulation for Galaxy A13 (360px wide).
+Tests
+Render at 320px width — verify no horizontal overflow.
+Render at 375px — verify chart fills container.
 Acceptance Criteria
-Stake tiers defined and configurable
-Multiplier applied correctly at score retrieval
-Tests for each stake tier boundary
-Score never exceeds a defined maximum (e.g., 10,000)
+Chart fills its container at all viewport widths
+No horizontal scroll on screens < 375px
+Moving average line remains visible at 375px

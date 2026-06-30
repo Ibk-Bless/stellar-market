@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { CheckCircle, Clock, XCircle, AlertCircle } from 'lucide-react';
+import LocalTimestamp from '@/components/LocalTimestamp';
 
 interface ApplicationStatusTrackerProps {
   status: 'pending' | 'accepted' | 'rejected' | 'withdrawn';
@@ -57,7 +58,7 @@ export default function ApplicationStatusTracker({
         <div>
           <h3 className="font-semibold text-theme-heading">{config.label}</h3>
           <p className="text-sm text-theme-text">
-            Submitted {new Date(submittedAt).toLocaleDateString()}
+            Submitted <LocalTimestamp isoString={submittedAt} />
           </p>
         </div>
       </div>
@@ -67,9 +68,7 @@ export default function ApplicationStatusTracker({
           <div className="flex items-center gap-2 text-sm">
             <div className="w-2 h-2 bg-stellar-blue rounded-full"></div>
             <span className="text-theme-text">Application submitted</span>
-            <span className="text-theme-text ml-auto">
-              {new Date(submittedAt).toLocaleString()}
-            </span>
+            <LocalTimestamp isoString={submittedAt} className="text-theme-text ml-auto" />
           </div>
           
           {status !== 'pending' && (
@@ -79,9 +78,10 @@ export default function ApplicationStatusTracker({
                 status === 'rejected' ? 'bg-theme-error' : 'bg-theme-text'
               }`}></div>
               <span className="text-theme-text">Status updated to {config.label.toLowerCase()}</span>
-              <span className="text-theme-text ml-auto">
-                {lastUpdated ? new Date(lastUpdated).toLocaleString() : 'Recently'}
-              </span>
+              {lastUpdated
+                ? <LocalTimestamp isoString={lastUpdated} className="text-theme-text ml-auto" />
+                : <span className="text-theme-text ml-auto">Recently</span>
+              }
             </div>
           )}
         </div>

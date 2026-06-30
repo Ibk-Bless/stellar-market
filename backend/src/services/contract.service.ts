@@ -13,18 +13,69 @@ import { MilestoneStatus } from "@prisma/client";
 import { config } from "../config";
 import { getRequestId } from "../lib/request-context";
 import { logger } from "../lib/logger";
+import { CircuitBreaker } from "../lib/circuit-breaker";
 
 const networkPassphrase = config.stellar.networkPassphrase;
 const contractId = config.stellar.escrowContractId;
 const READONLY_SOURCE = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const STROOPS_PER_XLM = 10_000_000n;
 
+const contractCB = new CircuitBreaker({
+  failureThreshold: 5,
+  openDurationMs: 60_000,
+  name: "ContractRpc",
+});
+
 function getRpcServer(): rpc.Server {
   const requestId = getRequestId();
+  const headers = requestId ? { "X-Request-ID": requestId } : undefined;
 
-  return new rpc.Server(config.stellar.rpcUrl, {
-    headers: requestId ? { "X-Request-ID": requestId } : undefined,
-  });
+  const primary = new rpc.Server(config.stellar.rpcUrl, { headers });
+  const secondary = new rpc.Server(config.stellar.secondaryRpcUrl, { headers });
+
+  return new Proxy(primary, {
+    get(target, prop, receiver) {
+      const origValue = Reflect.get(target, prop, receiver);
+      if (typeof origValue === "function") {
+        return async (...args: any[]) => {
+          const isPrimaryAllowed = contractCB.allowRequest();
+          if (isPrimaryAllowed) {
+            try {
+              const res = await origValue.apply(target, args);
+              contractCB.onSuccess();
+              return res;
+            } catch (err) {
+              contractCB.onFailure();
+              if (contractCB.getStatus().state === "OPEN") {
+                logger.warn({ err }, "Primary RPC failed, circuit opened. Falling back to secondary RPC.");
+                try {
+                  const secondaryMethod = Reflect.get(secondary, prop);
+                  return await secondaryMethod.apply(secondary, args);
+                } catch (secErr) {
+                  logger.error({ err: secErr }, "Secondary RPC fallback failed.");
+                  const apiErr = new Error("Stellar RPC services unavailable") as any;
+                  apiErr.statusCode = 503;
+                  throw apiErr;
+                }
+              }
+              throw err;
+            }
+          } else {
+            try {
+              const secondaryMethod = Reflect.get(secondary, prop);
+              return await secondaryMethod.apply(secondary, args);
+            } catch (secErr) {
+              logger.error({ err: secErr }, "Secondary RPC failed while circuit is open.");
+              const apiErr = new Error("Stellar RPC services unavailable") as any;
+              apiErr.statusCode = 503;
+              throw apiErr;
+            }
+          }
+        };
+      }
+      return origValue;
+    },
+  }) as rpc.Server;
 }
 
 export type RevisionProposalView = {
@@ -41,6 +92,22 @@ export type RevisionProposalView = {
   createdAt: number;
 };
 
+/** View of the on-chain exchange-rate parity snapshot recorded at funding time. */
+export type RateSnapshotView = {
+  /** TWAP of the funding token in XLM stroops, scaled by 1e7. */
+  twapPriceStroops: string;
+  /** Number of ledger samples the TWAP averaged over. */
+  samples: number;
+  /** Agreed job value in XLM stroops. */
+  agreedValueStroops: string;
+  /** Computed value of the deposit in XLM stroops at funding time. */
+  depositedValueStroops: string;
+  /** Tolerated downside deviation in basis points. */
+  maxSlippageBps: number;
+  /** Ledger sequence at which the snapshot was taken. */
+  ledger: number;
+};
+
 export class ContractSimulationError extends Error {
   constructor(public readonly simulationError: string) {
     super(`Contract simulation failed: ${simulationError}`);
@@ -49,6 +116,14 @@ export class ContractSimulationError extends Error {
 }
 
 export class ContractService {
+  static getCircuitBreakerStatus() {
+    return contractCB.getStatus();
+  }
+
+  static getCircuitBreaker() {
+    return contractCB;
+  }
+
   /**
    * Builds an un-signed transaction XDR for creating a job on-chain.
    */
@@ -127,8 +202,19 @@ export class ContractService {
 
   /**
    * Builds an un-signed transaction XDR for funding a job.
+   *
+   * `agreedValueStroops` is the off-chain-agreed job value expressed in XLM
+   * stroops; the contract validates the deposit against a DEX TWAP and rejects
+   * under-value funding. Pass `0n` to bypass the oracle check (native-XLM jobs
+   * and the legacy migration path). `maxSlippageBps` is the tolerated downside
+   * deviation in basis points (e.g. 200 = 2%).
    */
-  static async buildFundJobTx(clientPublicKey: string, jobId: string) {
+  static async buildFundJobTx(
+    clientPublicKey: string,
+    jobId: string,
+    agreedValueStroops: bigint = 0n,
+    maxSlippageBps: number = 0,
+  ) {
     const server = getRpcServer();
     const contract = new Contract(contractId);
     const account = await server.getAccount(clientPublicKey);
@@ -141,13 +227,83 @@ export class ContractService {
       contract.call(
         "fund_job",
         nativeToScVal(BigInt(jobId)),
-        new Address(clientPublicKey).toScVal()
+        new Address(clientPublicKey).toScVal(),
+        nativeToScVal(agreedValueStroops, { type: "i128" }),
+        nativeToScVal(maxSlippageBps, { type: "u32" }),
       )
     )
     .setTimeout(0)
     .build();
 
     return tx.toXDR();
+  }
+
+  /**
+   * Reads the stored exchange-rate parity snapshot for a job, or `null` if the
+   * job was funded without oracle validation (legacy / XLM-only).
+   */
+  static async getRateSnapshot(onChainJobId: string): Promise<RateSnapshotView | null> {
+    const contract = new Contract(contractId);
+    const native = await this.simulateContractRead(
+      contract.call("get_rate_snapshot", nativeToScVal(BigInt(onChainJobId))),
+    );
+    if (native === null || native === undefined) {
+      return null;
+    }
+    const snap = native as {
+      twap_price: bigint | number;
+      samples: number;
+      agreed_value_stroops: bigint | number;
+      deposited_value: bigint | number;
+      max_slippage_bps: number;
+      ledger: number;
+    };
+    return {
+      twapPriceStroops: snap.twap_price.toString(),
+      samples: Number(snap.samples),
+      agreedValueStroops: snap.agreed_value_stroops.toString(),
+      depositedValueStroops: snap.deposited_value.toString(),
+      maxSlippageBps: Number(snap.max_slippage_bps),
+      ledger: Number(snap.ledger),
+    };
+  }
+
+  /**
+   * Simulate `fund_job` so an exchange-rate parity failure can be surfaced as a
+   * structured API error *before* the client signs. Returns `{ ok: true }` when
+   * the deposit would pass, or a typed reason when it would be rejected.
+   *
+   * Network/simulation issues unrelated to parity are reported as `UNKNOWN` so
+   * callers can fall back to building the XDR rather than blocking funding.
+   */
+  static async simulateFundJob(
+    clientPublicKey: string,
+    onChainJobId: string,
+    agreedValueStroops: bigint,
+    maxSlippageBps: number,
+  ): Promise<
+    | { ok: true }
+    | { ok: false; reason: "INSUFFICIENT_VALUE" | "ORACLE_UNAVAILABLE" | "UNKNOWN"; detail?: string }
+  > {
+    const contract = new Contract(contractId);
+    const operation = contract.call(
+      "fund_job",
+      nativeToScVal(BigInt(onChainJobId)),
+      new Address(clientPublicKey).toScVal(),
+      nativeToScVal(agreedValueStroops, { type: "i128" }),
+      nativeToScVal(maxSlippageBps, { type: "u32" }),
+    );
+
+    try {
+      await this.simulateContractRead(operation);
+      return { ok: true };
+    } catch (err) {
+      const detail = err instanceof ContractSimulationError ? err.simulationError : String(err);
+      // EscrowError discriminants: InsufficientValue = 41, OracleUnavailable = 42.
+      if (/#41\b/.test(detail)) return { ok: false, reason: "INSUFFICIENT_VALUE", detail };
+      if (/#42\b/.test(detail)) return { ok: false, reason: "ORACLE_UNAVAILABLE", detail };
+      return { ok: false, reason: "UNKNOWN", detail };
+    }
   }
 
   /**
@@ -397,12 +553,47 @@ export class ContractService {
     const tx = await this.buildReadonlySimTx(operation);
     const simulation = await server.simulateTransaction(tx);
     if (rpc.Api.isSimulationError(simulation)) {
+      const traceId = getRequestId();
+      const txXdr = tx.toXDR();
+      logger.error({
+        traceId,
+        xdr: txXdr,
+        events: (simulation as any).events ?? [],
+        error: simulation.error,
+      }, "Soroban simulation failed");
+      if (process.env.NODE_ENV !== "production") {
+        void this.writeFailedSimulation(txXdr);
+      }
       throw new ContractSimulationError(simulation.error);
     }
     if (!rpc.Api.isSimulationSuccess(simulation)) {
+      const traceId = getRequestId();
+      const txXdr = tx.toXDR();
+      logger.error({
+        traceId,
+        xdr: txXdr,
+        events: (simulation as any).events ?? [],
+        error: "Simulation did not succeed — state restore may be required",
+      }, "Soroban simulation did not succeed");
+      if (process.env.NODE_ENV !== "production") {
+        void this.writeFailedSimulation(txXdr);
+      }
       throw new ContractSimulationError("Simulation did not succeed — state restore may be required");
     }
     return scValToNative(simulation.result!.retval);
+  }
+
+  private static async writeFailedSimulation(xdrBase64: string): Promise<void> {
+    try {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const dir = path.resolve("logs/failed-simulations");
+      await fs.mkdir(dir, { recursive: true });
+      const filename = path.join(dir, `${Date.now()}.xdr.txt`);
+      await fs.writeFile(filename, xdrBase64, "utf8");
+    } catch {
+      // best-effort; never let logging break the main flow
+    }
   }
 
   /**
@@ -696,5 +887,102 @@ export class ContractService {
         data: { budget: budgetXlm },
       });
     });
+  }
+
+  /**
+   * Fetches current ledger, expiry ledger, and days remaining for an escrow.
+   */
+  static async getEscrowTtl(onChainJobId: string): Promise<{
+    currentLedger: number;
+    expiryLedger: number;
+    daysRemaining: number;
+  } | null> {
+    try {
+      const server = getRpcServer();
+      const keyScVal = xdr.ScVal.scvVec([
+        xdr.ScVal.scvSymbol("Job"),
+        xdr.ScVal.scvU64(new xdr.Uint64(BigInt(onChainJobId)))
+      ]);
+      
+      const ledgerKey = xdr.LedgerKey.contractData(
+        new xdr.LedgerKeyContractData({
+          contract: Address.fromString(contractId).toScAddress(),
+          key: keyScVal,
+          durability: xdr.ContractDataDurability.persistent(),
+        })
+      );
+
+      const response = await server.getLedgerEntries(ledgerKey);
+      if (!response.entries || response.entries.length === 0) {
+        return null;
+      }
+      
+      const entry = response.entries[0];
+      const currentLedger = response.latestLedger;
+      const expiryLedger = entry.liveUntilLedgerSeq ?? 0;
+      
+      const ledgersRemaining = Math.max(0, expiryLedger - currentLedger);
+      const daysRemaining = (ledgersRemaining * 5) / (24 * 60 * 60);
+      
+      return {
+        currentLedger,
+        expiryLedger,
+        daysRemaining: Number(daysRemaining.toFixed(2)),
+      };
+    } catch (error) {
+      logger.error({ err: error, onChainJobId }, "Error fetching escrow TTL");
+      return null;
+    }
+  }
+
+  /**
+   * Builds an unsigned transaction XDR to extend escrow TTL.
+   */
+  static async buildExtendEscrowTtlTx(callerPublicKey: string, onChainJobId: string): Promise<string> {
+    const server = getRpcServer();
+    const contract = new Contract(contractId);
+    const account = await server.getAccount(callerPublicKey);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(
+        contract.call(
+          "extend_escrow_ttl",
+          nativeToScVal(BigInt(onChainJobId)),
+        ),
+      )
+      .setTimeout(0)
+      .build();
+
+    return tx.toXDR();
+  }
+
+  /**
+   * Fetches the assigned arbitrators for a dispute from the dispute contract.
+   */
+  static async getOnChainAssignedArbitrators(
+    onChainDisputeId: string
+  ): Promise<string[]> {
+    try {
+      const contract = new Contract(config.stellar.disputeContractId);
+      const native = await this.simulateContractRead(
+        contract.call(
+          "get_assigned_arbitrators",
+          nativeToScVal(BigInt(onChainDisputeId))
+        )
+      );
+      if (Array.isArray(native)) {
+        return native.map((addr: any) => String(addr));
+      }
+      return [];
+    } catch (error) {
+      logger.warn(
+        { err: error, onChainDisputeId },
+        "get_assigned_arbitrators simulation failed",
+      );
+      return [];
+    }
   }
 }

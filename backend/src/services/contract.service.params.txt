@@ -1,6 +1,6 @@
 # Transaction Parameters (Mental Draft)
 - `create_job(env, client: Address, freelancer: Address, token: Address, milestones: Vec<(String, i128, u64)>, job_deadline: u64)`
-- `fund_job(env, job_id: u64, client: Address)`
+- `fund_job(env, job_id: u64, client: Address, agreed_value_stroops: i128, max_slippage_bps: u32)`
 - `submit_milestone(env, job_id: u64, milestone_id: u32, freelancer: Address)`
 - `approve_milestone(env, job_id: u64, milestone_id: u32, client: Address)`
 

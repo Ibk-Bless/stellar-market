@@ -3,6 +3,7 @@
 import { ArrowUpRight, AlertTriangle, CheckCircle2, Clock3, Circle } from "lucide-react";
 import Link from "next/link";
 import type { Milestone } from "@/types";
+import { formatLocalTimestamp, formatUtcTimestamp } from "@/components/LocalTimestamp";
 
 type TrackedMilestone = Milestone & {
   releaseTransactionHash?: string;
@@ -52,11 +53,7 @@ const statusMeta: Record<
 
 function formatDeadline(deadline?: string | null) {
   if (!deadline) return "No deadline";
-  return new Date(deadline).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return formatLocalTimestamp(deadline);
 }
 
 export default function MilestoneProgressTracker({
@@ -128,7 +125,10 @@ export default function MilestoneProgressTracker({
                       {milestone.contractDeadline && (
                         <>
                           {" "}
-                          · due {formatDeadline(milestone.contractDeadline)}
+                          ·{" "}
+                          <span title={formatUtcTimestamp(milestone.contractDeadline)}>
+                            due {formatDeadline(milestone.contractDeadline)}
+                          </span>
                         </>
                       )}
                     </div>

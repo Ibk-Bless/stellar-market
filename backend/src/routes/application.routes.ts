@@ -82,6 +82,11 @@ router.post(
     // Invalidate recommendation cache for the freelancer
     await RecommendationService.invalidateUserRecommendations(req.userId!);
 
+    // Broadcast application-count patch so job feed cards update without a full re-fetch.
+    const applicationCount = await prisma.application.count({ where: { jobId } });
+    const { getIo } = await import("../socket");
+    getIo().emit("job:updated", { id: jobId, _count: { applications: applicationCount } });
+
     res.status(201).json(application);
   }),
 );
@@ -321,7 +326,7 @@ router.delete(
       return res.status(403).json({ error: "Not authorized." });
     }
     if (application.status !== "PENDING") {
-      return res.status(400).json({ error: "Cannot withdraw an accepted or rejected application." });
+      return res.status(409).json({ error: "Cannot withdraw an accepted or rejected application." });
     }
 
     await prisma.application.delete({ where: { id } });

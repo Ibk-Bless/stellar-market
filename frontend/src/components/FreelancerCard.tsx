@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { MapPin, CheckCircle2, User } from "lucide-react";
+import { Star, User } from "lucide-react";
 import { User as UserType } from "@/types";
 import Image from "next/image";
 import StarRating from "./StarRating";
@@ -12,6 +12,19 @@ interface FreelancerCardProps {
    * all others are lazy-loaded.
    */
   index?: number;
+}
+
+const AVAILABILITY_CONFIG = {
+  available: { color: "bg-green-500", label: "Available" },
+  busy: { color: "bg-amber-400", label: "Busy" },
+  unavailable: { color: "bg-gray-400", label: "Unavailable" },
+};
+
+function getAvailabilityStatus(freelancer: UserType): keyof typeof AVAILABILITY_CONFIG | null {
+  if (freelancer.availabilityStatus) return freelancer.availabilityStatus;
+  if (freelancer.availability === true) return "available";
+  if (freelancer.availability === false) return "unavailable";
+  return null;
 }
 
 export default function FreelancerCard({ freelancer, index = 0 }: FreelancerCardProps) {
@@ -31,6 +44,8 @@ export default function FreelancerCard({ freelancer, index = 0 }: FreelancerCard
 
   // First 3 cards are above-the-fold — load eagerly with priority
   const isPriority = index < 3;
+  const availStatus = getAvailabilityStatus(freelancer);
+  const availConfig = availStatus ? AVAILABILITY_CONFIG[availStatus] : null;
 
   return (
     <Link href={`/profile/${freelancer.id}`}>
@@ -53,18 +68,25 @@ export default function FreelancerCard({ freelancer, index = 0 }: FreelancerCard
                 <User size={32} />
               </div>
             )}
-            {freelancer.availability && (
+            {availConfig && (
               <div
-                className="absolute bottom-0 right-0 w-4 h-4 bg-theme-success border-2 border-theme-bg rounded-full"
-                title="Available"
-                aria-label="Available for work"
+                className={`absolute bottom-0 right-0 w-4 h-4 ${availConfig.color} border-2 border-theme-bg rounded-full`}
+                title={availConfig.label}
+                aria-label={availConfig.label}
               />
             )}
           </div>
           <div>
-            <h3 className="text-lg font-bold text-theme-heading mb-1 group-hover:text-stellar-blue transition-colors">
-              {freelancer.username}
-            </h3>
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="text-lg font-bold text-theme-heading group-hover:text-stellar-blue transition-colors">
+                {freelancer.username}
+              </h3>
+              {availConfig && (
+                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full text-white ${availConfig.color}`}>
+                  {availConfig.label}
+                </span>
+              )}
+            </div>
             <div className="mt-1">
               <StarRating rating={averageRating} reviewCount={reviewCount} />
             </div>

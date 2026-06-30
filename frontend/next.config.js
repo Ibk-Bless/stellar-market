@@ -1,6 +1,65 @@
+const withPWA = require("next-pwa")({
+  dest: "public",
+  disable: process.env.NODE_ENV === "development",
+  register: true,
+  skipWaiting: true,
+  // Disable workbox CDN by using local workbox
+  fallbacks: {
+    document: "/offline",
+  },
+  runtimeCaching: [
+    {
+      urlPattern: /^https?.*\/_next\/static\/.*/i,
+      handler: "CacheFirst",
+      options: {
+        cacheName: "next-static-cache",
+        expiration: {
+          maxEntries: 200,
+          maxAgeSeconds: 365 * 24 * 60 * 60, // 1 year
+        },
+      },
+    },
+    {
+      urlPattern: /^https?.*\/api\/(jobs|user|freelancers|services)\?.*$/i,
+      handler: "StaleWhileRevalidate",
+      options: {
+        cacheName: "api-cache",
+        expiration: {
+          maxEntries: 100,
+          maxAgeSeconds: 5 * 60, // 5 minutes
+        },
+      },
+    },
+    {
+      urlPattern: /\.(?:wasm)$/i,
+      handler: "CacheFirst",
+      options: {
+        cacheName: "stellar-sdk-cache",
+        expiration: {
+          maxEntries: 10,
+          maxAgeSeconds: 365 * 24 * 60 * 60, // 1 year
+        },
+      },
+    },
+    {
+      urlPattern: /\.(?:woff|woff2|ttf|otf|eot)$/i,
+      handler: "CacheFirst",
+      options: {
+        cacheName: "font-cache",
+        expiration: {
+          maxEntries: 20,
+          maxAgeSeconds: 365 * 24 * 60 * 60, // 1 year
+        },
+      },
+    },
+  ],
+});
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Add empty turbopack config to silence warning, but we'll use webpack for PWA
+  turbopack: {},
   images: {
     remotePatterns: [
       // Local dev upload server
@@ -33,4 +92,4 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = withPWA(nextConfig);

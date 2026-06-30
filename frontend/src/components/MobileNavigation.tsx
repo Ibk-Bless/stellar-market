@@ -1,87 +1,49 @@
-'use client';
+"use client";
 
-import React, { useState } from 'react';
-import { Menu, X, Home, Briefcase, Users, MessageSquare, Settings, User } from 'lucide-react';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import Link from "next/link";
+import { Briefcase, LayoutDashboard, ShieldCheck, User } from "lucide-react";
+import { usePathname } from "next/navigation";
 
 const navigationItems = [
-  { href: '/dashboard', icon: Home, label: 'Dashboard' },
-  { href: '/jobs', icon: Briefcase, label: 'Jobs' },
-  { href: '/freelancers', icon: Users, label: 'Freelancers' },
-  { href: '/messages', icon: MessageSquare, label: 'Messages' },
-  { href: '/profile', icon: User, label: 'Profile' },
-  { href: '/settings', icon: Settings, label: 'Settings' },
+  { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
+  { href: "/jobs", icon: Briefcase, label: "Jobs" },
+  { href: "/disputes", icon: ShieldCheck, label: "Disputes" },
+  { href: "/profile", icon: User, label: "Profile" },
 ];
 
 export default function MobileNavigation() {
-  const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
 
-  const toggleMenu = () => setIsOpen(!isOpen);
-  const closeMenu = () => setIsOpen(false);
-
   return (
-    <>
-      {/* Mobile menu button */}
-      <button
-        onClick={toggleMenu}
-        className="md:hidden fixed top-4 left-4 z-50 p-2 bg-theme-card rounded-lg shadow-lg border border-theme-border"
-        aria-label="Toggle navigation menu"
-      >
-        {isOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-      </button>
+    <nav
+      aria-label="Mobile navigation"
+      className="fixed inset-x-0 bottom-0 z-40 flex h-16 items-stretch border-t border-theme-border bg-theme-card/95 px-2 backdrop-blur md:hidden"
+    >
+      {navigationItems.map((item) => {
+        const Icon = item.icon;
+        const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`);
 
-      {/* Backdrop */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
-          onClick={closeMenu}
-        />
-      )}
-
-      {/* Mobile navigation drawer */}
-      <div
-        className={`fixed top-0 left-0 h-full w-64 bg-theme-bg shadow-xl z-50 transform transition-transform duration-300 ease-in-out md:hidden ${
-          isOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
-      >
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-8">
-            <h2 className="text-xl font-bold text-theme-heading">StellarMarket</h2>
-            <button
-              onClick={closeMenu}
-              className="p-1 rounded-lg hover:bg-theme-bg-secondary"
-              aria-label="Close menu"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          <nav className="space-y-2">
-            {navigationItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = pathname === item.href;
-              
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={closeMenu}
-                  className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-                    isActive
-                      ? 'bg-stellar-blue/10 text-stellar-blue border-r-2 border-stellar-blue'
-                      : 'text-theme-text hover:bg-theme-bg-secondary'
-                  }`}
-                >
-                  <Icon className="w-5 h-5" />
-                  <span className="font-medium">{item.label}</span>
-                </Link>
-              );
-            })}
-          </nav>
-        </div>
-      </div>
-    </>
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-label={item.label}
+            aria-current={isActive ? "page" : undefined}
+            data-active={isActive ? "true" : "false"}
+            className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-md transition-colors ${
+              isActive
+                ? "active text-stellar-blue font-bold"
+                : "text-theme-text hover:text-theme-heading"
+            }`}
+          >
+            <Icon size={isActive ? 22 : 20} strokeWidth={isActive ? 2.75 : 2} />
+            <span className={isActive ? "text-[10px] leading-none" : "hidden min-[420px]:block text-[10px] leading-none"}>
+              {item.label}
+            </span>
+            {isActive && <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-t bg-stellar-blue" aria-hidden="true" />}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

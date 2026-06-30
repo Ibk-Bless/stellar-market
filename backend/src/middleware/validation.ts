@@ -27,6 +27,18 @@ export const validate = (schema: {
       next();
     } catch (error) {
       if (error instanceof ZodError) {
+        const budgetMinimumError = error.issues.find(
+          (issue) =>
+            issue.path.length === 1 &&
+            issue.path[0] === "budget" &&
+            issue.message.startsWith("Budget must be at least "),
+        );
+        if (budgetMinimumError) {
+          return res.status(422).json({
+            code: "BudgetBelowMinimum",
+            message: budgetMinimumError.message,
+          });
+        }
         return next(createError("Validation failed", 400, error.issues));
       }
       next(error);

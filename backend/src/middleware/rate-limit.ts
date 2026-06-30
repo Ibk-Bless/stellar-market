@@ -98,8 +98,12 @@ export const writeRateLimiter = rateLimit({
   passOnStoreError: true,
   keyGenerator: (req: Request) => {
     const rateLimitedReq = req as RateLimitedRequest;
-    return rateLimitedReq.userId || req.ip || "unknown";
+    if (rateLimitedReq.userId) return String(rateLimitedReq.userId);
+    // Normalize IPv6-mapped IPv4 (::ffff:x.x.x.x) to avoid dual-stack bypass
+    const ip = (req.ip ?? req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/i, "");
+    return ip;
   },
+  validate: { ip: false }, // IP is normalized in keyGenerator above
   skip: (req: Request) => req.method !== "POST",
   handler: sendTooManyWrites,
 });

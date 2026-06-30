@@ -15,7 +15,7 @@ import { Dispute } from "@/types";
 import EmptyState from "@/components/EmptyState";
 import DisputeHistoryCardSkeleton from "@/components/skeletons/DisputeHistoryCardSkeleton";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 interface DisputeHistoryItem extends Dispute {
   jobTitle: string;

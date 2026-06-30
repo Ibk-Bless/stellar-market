@@ -1,4 +1,11 @@
 import { DisputeService } from "../services/dispute.service";
+import { ContractService } from "../services/contract.service";
+
+jest.mock("../services/contract.service", () => ({
+  ContractService: {
+    getOnChainAssignedArbitrators: jest.fn(),
+  },
+}));
 
 // Local runtime-friendly enums for tests (use string literals to avoid TS value/type mismatch
 // when importing generated Prisma types). This keeps tests stable and avoids relying on the
@@ -22,6 +29,7 @@ jest.mock("@prisma/client", () => {
   const mockPrisma = {
     user: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
     },
     job: {
       findUnique: jest.fn(),
@@ -215,6 +223,53 @@ describe("Dispute Management System", () => {
       await expect(
         DisputeService.getDisputeById("non-existent-id"),
       ).rejects.toThrow("Dispute not found");
+    });
+
+    it("should retrieve on-chain arbitrators and join user profiles if profile exists", async () => {
+      const fullDispute = {
+        ...mockDispute,
+        onChainDisputeId: "12345",
+        votes: [],
+        attachments: [],
+      };
+      prismaMock.dispute.findUnique.mockResolvedValueOnce(fullDispute);
+      (ContractService.getOnChainAssignedArbitrators as jest.Mock).mockResolvedValueOnce(["GARBITRATOR123"]);
+      prismaMock.user.findFirst.mockResolvedValueOnce({
+        username: "arb_user",
+        avatarUrl: "http://example.com/avatar.png",
+      });
+
+      const dispute = await DisputeService.getDisputeById(disputeId);
+
+      expect(dispute.arbitrators).toEqual([
+        {
+          address: "GARBITRATOR123",
+          displayName: "arb_user",
+          avatarUrl: "http://example.com/avatar.png",
+        },
+      ]);
+    });
+
+    it("should retrieve on-chain arbitrators and fallback to truncated address if profile does not exist", async () => {
+      const fullDispute = {
+        ...mockDispute,
+        onChainDisputeId: "12345",
+        votes: [],
+        attachments: [],
+      };
+      prismaMock.dispute.findUnique.mockResolvedValueOnce(fullDispute);
+      (ContractService.getOnChainAssignedArbitrators as jest.Mock).mockResolvedValueOnce(["GARBITRATOR123"]);
+      prismaMock.user.findFirst.mockResolvedValueOnce(null);
+
+      const dispute = await DisputeService.getDisputeById(disputeId);
+
+      expect(dispute.arbitrators).toEqual([
+        {
+          address: "GARBITRATOR123",
+          displayName: "GARB...R123",
+          avatarUrl: null,
+        },
+      ]);
     });
   });
 

@@ -259,7 +259,7 @@ fn test_create_job_empty_milestones() {
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #34)")] // TooManyMilestones
+#[should_panic(expected = "HostError: Error(Contract, #48)")] // TooManyMilestones
 fn test_create_job_too_many_milestones() {
     let env = Env::default();
     env.mock_all_auths();
@@ -268,7 +268,7 @@ fn test_create_job_too_many_milestones() {
     let (contract, user, freelancer, token, admin) = setup_test(&env);
 
     let mut milestones = vec![&env];
-    for _ in 0..51 {
+    for _ in 0..21 {
         milestones.push_back((String::from_str(&env, "Task"), 100_i128, 2000_u64));
     }
 
@@ -281,6 +281,53 @@ fn test_create_job_too_many_milestones() {
         &GRACE_PERIOD,
         &DEFAULT_EXPIRY_LEDGER,
     );
+}
+
+#[test]
+fn test_create_job_max_milestones_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, user, freelancer, token, admin) = setup_test(&env);
+
+    let mut milestones = vec![&env];
+    for _ in 0..20 {
+        milestones.push_back((String::from_str(&env, "Task"), 100_i128, 2000_u64));
+    }
+
+    let job_id = contract.create_job(
+        &user,
+        &freelancer,
+        &token,
+        &milestones,
+        &3000_u64,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    );
+    assert!(job_id > 0);
+}
+
+#[test]
+fn test_create_job_single_milestone_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, user, freelancer, token, admin) = setup_test(&env);
+
+    let milestones = vec![&env, (String::from_str(&env, "Single"), 100_i128, 2000_u64)];
+
+    let job_id = contract.create_job(
+        &user,
+        &freelancer,
+        &token,
+        &milestones,
+        &3000_u64,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    );
+    assert!(job_id > 0);
 }
 
 #[test]
@@ -308,7 +355,7 @@ fn test_submit_milestone_past_deadline() {
         &GRACE_PERIOD, // Correction 5
         &DEFAULT_EXPIRY_LEDGER,
     );
-    client.fund_job(&job_id, &user);
+    client.fund_job(&job_id, &user, &0, &0);
 
     // fast forward past deadline
     env.ledger().with_mut(|l| l.timestamp = 2500);
@@ -429,13 +476,13 @@ fn test_claim_refund_full() {
     let job_id = escrow.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client, expected_total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Advance time past job_deadline + grace period
     env.ledger()
         .with_mut(|l| l.timestamp = JOB_DEADLINE + GRACE_PERIOD + 1);
 
-    escrow.claim_refund(&job_id, &client);
+    escrow.claim_refund(&job_id, &client, &0);
 
     let job = escrow.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Cancelled);
@@ -471,7 +518,7 @@ fn test_claim_refund_partial() {
     );
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Freelancer submits milestone 0, client approves it
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -481,7 +528,7 @@ fn test_claim_refund_partial() {
     env.ledger()
         .with_mut(|l| l.timestamp = JOB_DEADLINE + GRACE_PERIOD + 1);
 
-    escrow.claim_refund(&job_id, &client);
+    escrow.claim_refund(&job_id, &client, &0);
 
     let job = escrow.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Cancelled);
@@ -516,7 +563,7 @@ fn test_claim_refund_in_progress_status() {
     );
 
     mint_tokens(&env, &token, &client, 3000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Submit and approve first milestone to move to InProgress
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -528,7 +575,7 @@ fn test_claim_refund_in_progress_status() {
     env.ledger()
         .with_mut(|l| l.timestamp = JOB_DEADLINE + GRACE_PERIOD + 1);
 
-    escrow.claim_refund(&job_id, &client);
+    escrow.claim_refund(&job_id, &client, &0);
     let job = escrow.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Cancelled);
 }
@@ -556,12 +603,12 @@ fn test_claim_refund_fails_before_grace_period() {
     );
 
     mint_tokens(&env, &token, &client, 3000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Time is before job_deadline + grace (only at deadline)
     env.ledger().with_mut(|l| l.timestamp = JOB_DEADLINE);
 
-    escrow.claim_refund(&job_id, &client);
+    escrow.claim_refund(&job_id, &client, &0);
 }
 
 // ── Fail: pending milestone submission ───────────────────────────────────────
@@ -587,7 +634,7 @@ fn test_claim_refund_fails_with_pending_milestone() {
     );
 
     mint_tokens(&env, &token, &client, 3000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Freelancer submits a milestone (status = Submitted, not yet approved)
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -596,7 +643,7 @@ fn test_claim_refund_fails_with_pending_milestone() {
         .with_mut(|l| l.timestamp = JOB_DEADLINE + GRACE_PERIOD + 1);
 
     // Should fail because there's a submitted milestone awaiting review
-    escrow.claim_refund(&job_id, &client);
+    escrow.claim_refund(&job_id, &client, &0);
 }
 
 // ── Fail: wrong caller (not the client) ──────────────────────────────────────
@@ -622,13 +669,13 @@ fn test_claim_refund_fails_unauthorized() {
     );
 
     mint_tokens(&env, &token, &client, 3000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     env.ledger()
         .with_mut(|l| l.timestamp = JOB_DEADLINE + GRACE_PERIOD + 1);
 
     // Freelancer tries to claim refund — should fail
-    escrow.claim_refund(&job_id, &freelancer);
+    escrow.claim_refund(&job_id, &freelancer, &0);
 }
 
 // ── Fail: job already completed ──────────────────────────────────────────────
@@ -660,7 +707,7 @@ fn test_claim_refund_fails_on_completed_job() {
     );
 
     mint_tokens(&env, &token, &client, task_amount);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Complete the job
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -673,7 +720,7 @@ fn test_claim_refund_fails_on_completed_job() {
         .with_mut(|l| l.timestamp = JOB_DEADLINE + GRACE_PERIOD + 1);
 
     // Should fail — job is already completed
-    escrow.claim_refund(&job_id, &client);
+    escrow.claim_refund(&job_id, &client, &0);
 }
 
 // ── Fail: job already cancelled ──────────────────────────────────────────────
@@ -699,16 +746,16 @@ fn test_claim_refund_fails_on_cancelled_job() {
     );
 
     mint_tokens(&env, &token, &client, 3000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Cancel the job first via existing cancel_job
-    escrow.cancel_job(&job_id, &client);
+    escrow.cancel_job(&job_id, &client, &0);
 
     env.ledger()
         .with_mut(|l| l.timestamp = JOB_DEADLINE + GRACE_PERIOD + 1);
 
     // Should fail — job is already cancelled
-    escrow.claim_refund(&job_id, &client);
+    escrow.claim_refund(&job_id, &client, &0);
 }
 
 // ============================================================
@@ -930,7 +977,7 @@ fn test_propose_revision_fails_when_pending_proposal_exists() {
 }
 
 #[test]
-#[should_panic(expected = "HostError: Error(Contract, #34)")] // TooManyMilestones
+#[should_panic(expected = "HostError: Error(Contract, #48)")] // TooManyMilestones
 fn test_propose_revision_too_many_milestones() {
     let env = Env::default();
     env.mock_all_auths();
@@ -940,7 +987,7 @@ fn test_propose_revision_too_many_milestones() {
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     let mut new_milestones = vec![&env];
-    for i in 0..51 {
+    for i in 0..21 {
         new_milestones.push_back(Milestone {
             id: i,
             description: String::from_str(&env, "New"),
@@ -1043,7 +1090,7 @@ fn test_accept_revision_same_total_updates_milestones_only() {
     let initial_amount: i128 = 1000;
     let milestones = vec![&env, (String::from_str(&env, "Initial"), initial_amount, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token_addr, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     let initial_escrow_balance = token.balance(&contract.address);
     assert_eq!(initial_escrow_balance, initial_amount);
@@ -1093,7 +1140,7 @@ fn test_accept_revision_with_increased_total_transfers_difference_from_client() 
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), initial_amount, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token_addr, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     let client_initial_balance = token.balance(&client);
 
@@ -1130,7 +1177,7 @@ fn test_accept_revision_with_decreased_total_refunds_difference_to_client() {
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), initial_amount, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token_addr, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     let client_balance_after_funding = token.balance(&client);
 
@@ -1244,7 +1291,7 @@ fn test_accept_revision_emits_event() {
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     let new_milestones = vec![
         &env,
@@ -1382,7 +1429,7 @@ fn test_cancel_revision_fails_when_already_accepted() {
 
     let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     let new_milestones = vec![
         &env,
@@ -1508,7 +1555,7 @@ fn test_resolve_dispute_callback_client_wins() {
     );
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     escrow.resolve_dispute_callback(&job_id, &DisputeResolution::ClientWins);
 
@@ -1541,7 +1588,7 @@ fn test_resolve_dispute_callback_freelancer_wins() {
     );
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     escrow.resolve_dispute_callback(&job_id, &DisputeResolution::FreelancerWins);
 
@@ -1576,7 +1623,7 @@ fn test_resolve_dispute_callback_refund_both() {
     );
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     escrow.resolve_dispute_callback(&job_id, &DisputeResolution::RefundBoth);
 
@@ -1704,7 +1751,7 @@ fn test_fund_job_when_paused() {
     );
 
     pause_escrow(&env, &client, &admin);
-    client.fund_job(&job_id, &user);
+    client.fund_job(&job_id, &user, &0, &0);
 }
 
 #[test]
@@ -1735,7 +1782,7 @@ fn test_fund_job_rejects_non_client_caller() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    client.fund_job(&job_id, &attacker);
+    client.fund_job(&job_id, &attacker, &0, &0);
 }
 
 #[test]
@@ -1765,7 +1812,7 @@ fn test_submit_milestone_when_paused() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    client.fund_job(&job_id, &user);
+    client.fund_job(&job_id, &user, &0, &0);
     pause_escrow(&env, &client, &admin);
     client.submit_milestone(&job_id, &0, &freelancer);
 }
@@ -1797,7 +1844,7 @@ fn test_approve_milestone_when_paused() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    client.fund_job(&job_id, &user);
+    client.fund_job(&job_id, &user, &0, &0);
     client.submit_milestone(&job_id, &0, &freelancer);
     pause_escrow(&env, &client, &admin);
     client.approve_milestone(&job_id, &0, &user);
@@ -1830,14 +1877,14 @@ fn test_claim_refund_when_paused() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    client.fund_job(&job_id, &user);
+    client.fund_job(&job_id, &user, &0, &0);
 
     // Advance time past deadline + grace period
     env.ledger()
         .with_mut(|l| l.timestamp = 2500 + GRACE_PERIOD + 1); // Correction 5
 
     pause_escrow(&env, &client, &admin);
-    client.claim_refund(&job_id, &user);
+    client.claim_refund(&job_id, &user, &0);
 }
 
 #[test]
@@ -1952,7 +1999,7 @@ fn test_approve_milestones_batch_happy_path() {
     );
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     escrow.submit_milestone(&job_id, &0, &freelancer);
     escrow.submit_milestone(&job_id, &1, &freelancer);
@@ -2006,7 +2053,7 @@ fn test_approve_milestones_batch_partial_invalid() {
     );
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Submit only the first milestone
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -2050,7 +2097,7 @@ fn test_approve_milestones_batch_unauthorized_caller() {
     );
 
     mint_tokens(&env, &token, &client, 1000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     escrow.submit_milestone(&job_id, &0, &freelancer);
 
@@ -2089,7 +2136,7 @@ fn test_approve_milestones_batch_non_existent_index() {
     );
 
     mint_tokens(&env, &token, &client, 1000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     escrow.submit_milestone(&job_id, &0, &freelancer);
 
@@ -2151,7 +2198,7 @@ fn test_fee_deduction_single_approval() {
     let job_id = escrow.create_job(&client_addr, &freelancer, &token, &milestones, &3000_u64, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client_addr, milestone_amount);
-    escrow.fund_job(&job_id, &client_addr);
+    escrow.fund_job(&job_id, &client_addr, &0, &0);
 
     escrow.submit_milestone(&job_id, &0, &freelancer);
     escrow.approve_milestone(&job_id, &0, &client_addr);
@@ -2196,7 +2243,7 @@ fn test_fee_deduction_batch_approval() {
     let job_id = escrow.create_job(&client_addr, &freelancer, &token, &milestones, &5000_u64, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client_addr, total);
-    escrow.fund_job(&job_id, &client_addr);
+    escrow.fund_job(&job_id, &client_addr, &0, &0);
 
     escrow.submit_milestone(&job_id, &0, &freelancer);
     escrow.submit_milestone(&job_id, &1, &freelancer);
@@ -2263,7 +2310,7 @@ fn test_fund_job_underfunding_rejected() {
     });
 
     // Must fail with InvalidAmount
-    escrow.fund_job(&job_id, &user);
+    escrow.fund_job(&job_id, &user, &0, &0);
 }
 
 /// Verifies that fund_job rejects a job whose stored total_amount is MORE than
@@ -2300,7 +2347,7 @@ fn test_fund_job_overfunding_rejected() {
     });
 
     // Must fail with InvalidAmount
-    escrow.fund_job(&job_id, &user);
+    escrow.fund_job(&job_id, &user, &0, &0);
 }
 
 // ── expire_job tests (issue #267) ────────────────────────────────────────────
@@ -2318,7 +2365,7 @@ fn test_expire_job_happy_path() {
     let job_id = escrow.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Advance ledger past the job deadline
     env.ledger().with_mut(|l| l.timestamp = JOB_DEADLINE + 1);
@@ -2353,7 +2400,7 @@ fn test_expire_job_partial_refund_after_approved_milestone() {
     let job_id = escrow.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Approve first milestone
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -2386,7 +2433,7 @@ fn test_expire_job_premature_call_fails() {
     let job_id = escrow.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client, 3000);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     // Still before the deadline
     env.ledger().with_mut(|l| l.timestamp = JOB_DEADLINE - 1);
@@ -2411,7 +2458,7 @@ fn test_expire_job_already_completed_fails() {
     let job_id = escrow.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client, amount);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
 
     escrow.submit_milestone(&job_id, &0, &freelancer);
     escrow.approve_milestone(&job_id, &0, &client);
@@ -2437,8 +2484,8 @@ fn test_expire_job_already_cancelled_fails() {
     let job_id = escrow.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     mint_tokens(&env, &token, &client, 3000);
-    escrow.fund_job(&job_id, &client);
-    escrow.cancel_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
+    escrow.cancel_job(&job_id, &client, &0);
 
     env.ledger().with_mut(|l| l.timestamp = JOB_DEADLINE + 1);
 
@@ -2460,7 +2507,7 @@ fn test_payment_released_event_emitted_on_last_milestone_approval() {
     let milestones = vec![&env, (String::from_str(&env, "Only task"), amount, JOB_DEADLINE)];
     let job_id = contract.create_job(&client_addr, &freelancer, &token_addr, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client_addr);
 
@@ -2493,7 +2540,7 @@ fn test_payment_released_event_not_emitted_on_partial_approval() {
     ];
     let job_id = contract.create_job(&client_addr, &freelancer, &token_addr, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client_addr);
 
@@ -2527,7 +2574,7 @@ fn test_payment_released_event_emitted_via_batch_approval() {
     ];
     let job_id = contract.create_job(&client_addr, &freelancer, &token_addr, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.submit_milestone(&job_id, &1, &freelancer);
     contract.approve_milestones_batch(&job_id, &vec![&env, 0_u32, 1_u32], &client_addr);
@@ -2620,11 +2667,11 @@ fn test_release_partial_payment_happy_path() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     // Release 70% of the milestone
-    contract.release_partial_payment(&job_id, &0, &partial, &client_addr);
+    contract.release_partial_payment(&job_id, &0, &partial, &client_addr, &0);
 
     let job = contract.get_job(&job_id);
     let ms = job.milestones.get(0).unwrap();
@@ -2650,11 +2697,11 @@ fn test_release_partial_payment_fully_zeros_becomes_approved() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     // Pay the full amount via release_partial_payment
-    contract.release_partial_payment(&job_id, &0, &amount, &client_addr);
+    contract.release_partial_payment(&job_id, &0, &amount, &client_addr, &0);
 
     let job = contract.get_job(&job_id);
     let ms = job.milestones.get(0).unwrap();
@@ -2681,16 +2728,16 @@ fn test_release_partial_then_full_remainder() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     // First partial payment
-    contract.release_partial_payment(&job_id, &0, &partial, &client_addr);
+    contract.release_partial_payment(&job_id, &0, &partial, &client_addr, &0);
     assert_eq!(token.balance(&freelancer), partial);
 
     // Second partial payment clears the rest
     let remaining = amount - partial;
-    contract.release_partial_payment(&job_id, &0, &remaining, &client_addr);
+    contract.release_partial_payment(&job_id, &0, &remaining, &client_addr, &1);
 
     let job = contract.get_job(&job_id);
     assert_eq!(job.milestones.get(0).unwrap().status, MilestoneStatus::Approved);
@@ -2713,10 +2760,10 @@ fn test_release_partial_payment_amount_zero_rejected() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
-    let result = contract.try_release_partial_payment(&job_id, &0, &0_i128, &client_addr);
+    let result = contract.try_release_partial_payment(&job_id, &0, &0_i128, &client_addr, &0);
     assert!(result.is_err()); // InvalidPartialAmount (#32)
 }
 
@@ -2735,11 +2782,11 @@ fn test_release_partial_payment_amount_exceeds_milestone_rejected() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     // Request more than the milestone holds
-    let result = contract.try_release_partial_payment(&job_id, &0, &(amount + 1), &client_addr);
+    let result = contract.try_release_partial_payment(&job_id, &0, &(amount + 1), &client_addr, &0);
     assert!(result.is_err()); // InvalidPartialAmount (#32)
 }
 
@@ -2758,10 +2805,10 @@ fn test_release_partial_payment_wrong_status_rejected() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     // Do NOT submit the milestone — status is Pending, not Submitted
 
-    let result = contract.try_release_partial_payment(&job_id, &0, &100_i128, &client_addr);
+    let result = contract.try_release_partial_payment(&job_id, &0, &100_i128, &client_addr, &0);
     assert!(result.is_err()); // InvalidStatus (#3)
 }
 
@@ -2780,11 +2827,11 @@ fn test_release_partial_payment_unauthorized_rejected() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     let attacker = Address::generate(&env);
-    let result = contract.try_release_partial_payment(&job_id, &0, &100_i128, &attacker);
+    let result = contract.try_release_partial_payment(&job_id, &0, &100_i128, &attacker, &0);
     assert!(result.is_err()); // Unauthorized (#2)
 }
 
@@ -2873,7 +2920,7 @@ fn test_top_up_escrow_partial_top_up() {
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     // Simulate revision increasing total_amount so there is room to top up
     env.as_contract(&contract.address, || {
@@ -2906,7 +2953,7 @@ fn test_top_up_escrow_completing_funding() {
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     env.as_contract(&contract.address, || {
         let key = crate::DataKey::Job(job_id);
@@ -2938,7 +2985,7 @@ fn test_top_up_escrow_overfund_rejection() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     // Trying to top up on a fully-funded job should fail with AlreadyFunded (#6)
     contract.top_up_escrow(&client, &job_id, &1_i128);
@@ -2957,7 +3004,7 @@ fn test_top_up_escrow_emits_event() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 
     env.as_contract(&contract.address, || {
         let key = crate::DataKey::Job(job_id);
@@ -3172,10 +3219,10 @@ fn test_fund_job_fails_when_already_funded() {
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
     
     // Fund the job once (valid transition: Created -> Funded)
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     
     // Try to fund again (invalid: Funded -> Funded)
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 }
 
 #[test]
@@ -3189,13 +3236,13 @@ fn test_fund_job_fails_when_in_progress() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     
     // Submit milestone to transition to InProgress
     contract.submit_milestone(&job_id, &0, &freelancer);
     
     // Try to fund again (invalid: InProgress -> Funded)
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 }
 
 #[test]
@@ -3209,13 +3256,13 @@ fn test_fund_job_fails_when_completed() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
     
     // Job is now Completed (terminal state)
     // Try to fund again (invalid: Completed -> Funded)
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
 }
 
 #[test]
@@ -3249,7 +3296,7 @@ fn test_submit_milestone_fails_when_completed() {
         (String::from_str(&env, "Work 2"), 500_i128, JOB_DEADLINE),
     ];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
     
@@ -3291,7 +3338,7 @@ fn test_cancel_job_fails_when_created() {
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
     
     // Try to cancel before funding (invalid: Created state cannot be cancelled)
-    contract.cancel_job(&job_id, &client);
+    contract.cancel_job(&job_id, &client, &0);
 }
 
 #[test]
@@ -3305,13 +3352,13 @@ fn test_cancel_job_fails_when_completed() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
     
     // Job is now Completed (terminal state)
     // Try to cancel (invalid: Completed is terminal)
-    contract.cancel_job(&job_id, &client);
+    contract.cancel_job(&job_id, &client, &0);
 }
 
 #[test]
@@ -3324,10 +3371,10 @@ fn test_cancel_job_succeeds_when_funded_no_work_started() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     
     // Valid transition: Funded -> Cancelled (no work started)
-    contract.cancel_job(&job_id, &client);
+    contract.cancel_job(&job_id, &client, &0);
     
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Cancelled);
@@ -3344,12 +3391,12 @@ fn test_cancel_job_fails_when_work_in_progress() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     
     // Milestone is submitted (work in progress)
     // Try to cancel (invalid: must dispute instead)
-    contract.cancel_job(&job_id, &client);
+    contract.cancel_job(&job_id, &client, &0);
 }
 
 #[test]
@@ -3379,7 +3426,7 @@ fn test_top_up_escrow_fails_when_completed() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
     
@@ -3399,7 +3446,7 @@ fn test_expire_job_fails_when_completed() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
     
@@ -3422,8 +3469,8 @@ fn test_expire_job_fails_when_cancelled() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
-    contract.cancel_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
+    contract.cancel_job(&job_id, &client, &0);
     
     // Job is now Cancelled (terminal state)
     // Advance time past deadline
@@ -3444,7 +3491,7 @@ fn test_expire_job_fails_when_already_expired() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     
     // Advance time past deadline
     env.ledger().with_mut(|l| l.timestamp = JOB_DEADLINE + 1);
@@ -3466,7 +3513,7 @@ fn test_expire_job_succeeds_when_funded() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     
     // Advance time past deadline
     env.ledger().with_mut(|l| l.timestamp = JOB_DEADLINE + 1);
@@ -3492,7 +3539,7 @@ fn test_expire_job_succeeds_when_in_progress() {
         (String::from_str(&env, "Work 2"), 500_i128, JOB_DEADLINE),
     ];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     
     // Job is now InProgress
@@ -3533,7 +3580,7 @@ fn test_resolve_dispute_fails_when_completed() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
     
@@ -3553,8 +3600,8 @@ fn test_resolve_dispute_fails_when_cancelled() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
-    contract.cancel_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
+    contract.cancel_job(&job_id, &client, &0);
     
     // Job is now Cancelled (terminal state)
     // Try to resolve dispute (invalid: Cancelled is terminal)
@@ -3576,7 +3623,7 @@ fn test_state_transition_created_to_funded() {
     assert_eq!(job.status, JobStatus::Created);
     
     // Valid transition: Created -> Funded
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Funded);
@@ -3592,7 +3639,7 @@ fn test_state_transition_funded_to_in_progress() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Funded);
@@ -3614,7 +3661,7 @@ fn test_state_transition_in_progress_to_completed() {
 
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     
     let job = contract.get_job(&job_id);
@@ -3638,7 +3685,7 @@ fn test_terminal_states_cannot_transition() {
     // Test Completed is terminal
     let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
-    contract.fund_job(&job_id, &client);
+    contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
     
@@ -3677,11 +3724,11 @@ fn test_release_milestone_success() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     // Release the first milestone
-    contract.release_milestone(&job_id, &0, &client_addr);
+    contract.release_milestone(&job_id, &0, &client_addr, &0, &0);
 
     let job = contract.get_job(&job_id);
     let milestone = job.milestones.get(0).unwrap();
@@ -3714,9 +3761,9 @@ fn test_release_milestone_completes_job() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
-    contract.release_milestone(&job_id, &0, &client_addr);
+    contract.release_milestone(&job_id, &0, &client_addr, &0, &0);
 
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Completed);
@@ -3745,9 +3792,9 @@ fn test_release_milestone_event_emitted() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
-    contract.release_milestone(&job_id, &0, &client_addr);
+    contract.release_milestone(&job_id, &0, &client_addr, &0, &0);
 
     let events = env.events().all();
     let mut found_ms_released = false;
@@ -3796,11 +3843,11 @@ fn test_release_milestone_fails_for_non_client() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     // Freelancer tries to release — should fail with Unauthorized (#2)
-    contract.release_milestone(&job_id, &0, &freelancer);
+    contract.release_milestone(&job_id, &0, &freelancer, &0, &0);
 }
 
 #[test]
@@ -3826,7 +3873,7 @@ fn test_release_milestone_fails_for_disputed_job() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
 
     // Set job status to Disputed
@@ -3837,7 +3884,7 @@ fn test_release_milestone_fails_for_disputed_job() {
         env.storage().persistent().set(&key, &job);
     });
 
-    let result = contract.try_release_milestone(&job_id, &0, &client_addr);
+    let result = contract.try_release_milestone(&job_id, &0, &client_addr, &0, &0);
     assert!(result.is_err());
 }
 
@@ -3869,7 +3916,7 @@ fn test_partial_refund_success() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // Approve first milestone so remaining = 600 (the second milestone amount)
     contract.submit_milestone(&job_id, &0, &freelancer);
@@ -3880,7 +3927,7 @@ fn test_partial_refund_success() {
     let balance_before = token_client.balance(&client_addr);
 
     // Partial refund of 200 from the remaining 600
-    contract.partial_refund(&admin, &job_id, &200);
+    contract.partial_refund(&admin, &job_id, &200, &0);
 
     // Verify token transfer
     let balance_after = token_client.balance(&client_addr);
@@ -3922,21 +3969,21 @@ fn test_partial_refund_balance_tracked_accurately() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // Submit and approve M1 (300 paid out, remaining = 700)
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client_addr);
 
     // Partial refund of 200 → total_amount should be 1000 - 200 = 800, funded = 800
-    contract.partial_refund(&admin, &job_id, &200);
+    contract.partial_refund(&admin, &job_id, &200, &0);
 
     let job = contract.get_job(&job_id);
     assert_eq!(job.total_amount, 800);
     assert_eq!(job.funded_amount, 800);
 
     // Another partial refund of 100 → total_amount = 700, funded = 700
-    contract.partial_refund(&admin, &job_id, &100);
+    contract.partial_refund(&admin, &job_id, &100, &1);
 
     let job = contract.get_job(&job_id);
     assert_eq!(job.total_amount, 700);
@@ -3966,10 +4013,10 @@ fn test_partial_refund_fails_over_refund() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // No milestones approved, remaining = 500. Attempt to refund 600 > 500 → should fail.
-    let result = contract.try_partial_refund(&admin, &job_id, &600);
+    let result = contract.try_partial_refund(&admin, &job_id, &600, &0);
     assert!(result.is_err());
 }
 
@@ -3998,10 +4045,10 @@ fn test_partial_refund_fails_unauthorized_caller() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // Unauthorized caller is not a signer → should fail with NotAdmin (#16)
-    let result = contract.try_partial_refund(&unauthorized, &job_id, &100);
+    let result = contract.try_partial_refund(&unauthorized, &job_id, &100, &0);
     assert!(result.is_err());
 }
 
@@ -4028,9 +4075,9 @@ fn test_partial_refund_event_emitted() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
-    contract.partial_refund(&admin, &job_id, &200);
+    contract.partial_refund(&admin, &job_id, &200, &0);
 
     let events = env.events().all();
     let mut found_partial_ref = false;
@@ -4082,7 +4129,7 @@ fn test_expire_proposal_success() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // Client proposes a revision (using the existing Milestone type directly)
     let new_milestones = vec![
@@ -4131,7 +4178,7 @@ fn test_expire_proposal_event_emitted() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     let new_milestones = vec![
         &env,
@@ -4191,7 +4238,7 @@ fn test_expire_proposal_fails_before_ttl() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     let new_milestones = vec![
         &env,
@@ -4233,7 +4280,7 @@ fn test_expire_proposal_fails_non_proposer() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // Client proposes a revision
     let new_milestones = vec![
@@ -4278,7 +4325,7 @@ fn test_expire_proposal_fails_non_pending() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // Client proposes a revision
     let new_milestones = vec![
@@ -4326,7 +4373,7 @@ fn test_expire_proposal_fails_no_proposal() {
         &DEFAULT_EXPIRY_LEDGER,
     );
 
-    contract.fund_job(&job_id, &client_addr);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
 
     // No proposal exists → should fail
     env.ledger().with_mut(|l| l.timestamp += 604800 + 1);
@@ -4361,7 +4408,7 @@ fn test_claim_expired_success() {
     
     let total: i128 = 500 + 1000 + 1500;
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
     
     // Advance past expiry_ledger (sequence) and past job_deadline (timestamp)
     env.ledger().with_mut(|l| {
@@ -4407,7 +4454,7 @@ fn test_claim_expired_fails_before_expiry() {
     
     let total: i128 = 500 + 1000 + 1500;
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
     
     // Ledger sequence is still before expiry_ledger
     env.ledger().with_mut(|l| l.sequence_number = expiry_ledger - 1);
@@ -4441,7 +4488,7 @@ fn test_claim_expired_fails_on_completed_job() {
     
     let total: i128 = 500 + 1000 + 1500;
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
     
     // Complete the job
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -4487,10 +4534,10 @@ fn test_claim_expired_fails_on_cancelled_job() {
     
     let total: i128 = 500 + 1000 + 1500;
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
     
     // Cancel the job
-    escrow.cancel_job(&job_id, &client);
+    escrow.cancel_job(&job_id, &client, &0);
 
     // Advance past both deadline (timestamp) and expiry_ledger (sequence).
     env.ledger().with_mut(|l| {
@@ -4526,7 +4573,7 @@ fn test_claim_expired_with_approved_milestones() {
     
     let total: i128 = 500 + 1000 + 1500;
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
     
     // Approve first milestone (500)
     escrow.submit_milestone(&job_id, &0, &freelancer);
@@ -4577,7 +4624,7 @@ fn test_claim_expired_emits_event() {
     
     let total: i128 = 500 + 1000 + 1500;
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
     
     // Advance past expiry_ledger (sequence) and job_deadline (timestamp).
     env.ledger().with_mut(|l| {
@@ -4627,7 +4674,7 @@ fn test_claim_expired_permissionless() {
     
     let total: i128 = 500 + 1000 + 1500;
     mint_tokens(&env, &token, &client, total);
-    escrow.fund_job(&job_id, &client);
+    escrow.fund_job(&job_id, &client, &0, &0);
     
     // Advance past expiry_ledger (sequence) and job_deadline (timestamp).
     env.ledger().with_mut(|l| {
@@ -4641,4 +4688,641 @@ fn test_claim_expired_permissionless() {
     // Verify job status is Expired
     let job = escrow.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Expired);
+}
+
+// ─── Exchange-rate parity (TWAP oracle) tests ──────────────────────────────────
+
+/// A mock price oracle returning a configurable TWAP price and sample count.
+/// Mirrors the interface the escrow contract invokes:
+/// `twap(token: Address, quote: Address, sample_ledgers: u32) -> (i128 price, u32 samples)`.
+#[contract]
+pub struct MockOracle;
+
+#[contractimpl]
+impl MockOracle {
+    pub fn set(env: Env, price: i128, samples: u32) {
+        env.storage().instance().set(&symbol_short!("price"), &price);
+        env.storage().instance().set(&symbol_short!("samples"), &samples);
+    }
+
+    pub fn twap(env: Env, _token: Address, _quote: Address, _sample_ledgers: u32) -> (i128, u32) {
+        let price: i128 = env.storage().instance().get(&symbol_short!("price")).unwrap_or(0);
+        let samples: u32 = env.storage().instance().get(&symbol_short!("samples")).unwrap_or(0);
+        (price, samples)
+    }
+}
+
+/// Register a MockOracle, configure its price/samples, and wire it into the escrow.
+fn setup_oracle(
+    env: &Env,
+    escrow: &EscrowContractClient<'_>,
+    admin: &Address,
+    price: i128,
+    samples: u32,
+) -> Address {
+    let oracle_id = env.register_contract(None, MockOracle);
+    let oracle = MockOracleClient::new(env, &oracle_id);
+    oracle.set(&price, &samples);
+    escrow.set_price_oracle(admin, &oracle_id);
+    oracle_id
+}
+
+/// Create a single-milestone job worth `total` and return its id.
+fn create_priced_job(
+    env: &Env,
+    escrow: &EscrowContractClient<'_>,
+    client_addr: &Address,
+    freelancer: &Address,
+    token: &Address,
+    total: i128,
+) -> u64 {
+    let milestones = vec![&env, (String::from_str(env, "Task"), total, JOB_DEADLINE)];
+    escrow.create_job(
+        client_addr,
+        freelancer,
+        token,
+        &milestones,
+        &JOB_DEADLINE,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    )
+}
+
+#[test]
+fn test_fund_with_exact_value_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, token, admin) = setup_test(&env);
+    // price 1.0 (PRICE_SCALE), 12 samples
+    setup_oracle(&env, &escrow, &admin, PRICE_SCALE, 12);
+
+    let job_id = create_priced_job(&env, &escrow, &client_addr, &freelancer, &token, 100);
+    // deposited_value = 100 * 1.0 = 100; agreed 100, 0% slippage -> exact match passes.
+    escrow.fund_job(&job_id, &client_addr, &100, &0);
+
+    let job = escrow.get_job(&job_id);
+    assert_eq!(job.status, JobStatus::Funded);
+
+    let snap = escrow.get_rate_snapshot(&job_id).unwrap();
+    assert_eq!(snap.deposited_value, 100);
+    assert_eq!(snap.agreed_value_stroops, 100);
+    assert_eq!(snap.twap_price, PRICE_SCALE);
+    assert_eq!(snap.samples, 12);
+}
+
+#[test]
+fn test_fund_one_bps_under_tolerance_passes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, token, admin) = setup_test(&env);
+    setup_oracle(&env, &escrow, &admin, PRICE_SCALE, 10);
+
+    // deposited_value = 10000 * 1.0 = 10000.
+    // agreed 10000, slippage 200 bps (2%) -> min_value = 9800. 10000 >= 9800 passes.
+    let job_id = create_priced_job(&env, &escrow, &client_addr, &freelancer, &token, 10000);
+    escrow.fund_job(&job_id, &client_addr, &10000, &200);
+
+    assert_eq!(escrow.get_job(&job_id).status, JobStatus::Funded);
+}
+
+#[test]
+fn test_fund_one_bps_over_tolerance_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, token, admin) = setup_test(&env);
+    // price 1.0 (PRICE_SCALE), 10 samples.
+    setup_oracle(&env, &escrow, &admin, PRICE_SCALE, 10);
+
+    // agreed 10000, slippage 200 bps -> min_value = 9800.
+    // deposited_value = 9799 -> exactly 1 unit under tolerance -> rejected.
+    let job_id = create_priced_job(&env, &escrow, &client_addr, &freelancer, &token, 9799);
+    let res = escrow.try_fund_job(&job_id, &client_addr, &10000, &200);
+    assert_eq!(res, Err(Ok(EscrowError::InsufficientValue)));
+
+    // Job remains unfunded.
+    assert_eq!(escrow.get_job(&job_id).status, JobStatus::Created);
+}
+
+#[test]
+fn test_fund_boundary_exact_min_value_passes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, token, admin) = setup_test(&env);
+    setup_oracle(&env, &escrow, &admin, PRICE_SCALE, 10);
+
+    // deposited_value = 9800. agreed 10000, slippage 200 bps -> min_value = 9800.
+    // 9800 >= 9800 -> passes (boundary inclusive).
+    let job_id = create_priced_job(&env, &escrow, &client_addr, &freelancer, &token, 9800);
+    escrow.fund_job(&job_id, &client_addr, &10000, &200);
+    assert_eq!(escrow.get_job(&job_id).status, JobStatus::Funded);
+}
+
+#[test]
+fn test_xlm_only_job_bypasses_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, token, _admin) = setup_test(&env);
+    // No oracle configured at all.
+    let job_id = create_priced_job(&env, &escrow, &client_addr, &freelancer, &token, 100);
+
+    // agreed_value_stroops = 0 -> oracle bypassed, funding succeeds.
+    escrow.fund_job(&job_id, &client_addr, &0, &0);
+    assert_eq!(escrow.get_job(&job_id).status, JobStatus::Funded);
+    // No snapshot is stored on the bypass path.
+    assert!(escrow.get_rate_snapshot(&job_id).is_none());
+}
+
+#[test]
+fn test_oracle_unavailable_when_not_configured() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, token, _admin) = setup_test(&env);
+    let job_id = create_priced_job(&env, &escrow, &client_addr, &freelancer, &token, 100);
+
+    // agreed value > 0 but no oracle set -> OracleUnavailable, not a panic.
+    let res = escrow.try_fund_job(&job_id, &client_addr, &100, &200);
+    assert_eq!(res, Err(Ok(EscrowError::OracleUnavailable)));
+    assert_eq!(escrow.get_job(&job_id).status, JobStatus::Created);
+}
+
+#[test]
+fn test_oracle_too_few_samples_unavailable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (escrow, client_addr, freelancer, token, admin) = setup_test(&env);
+    // Only 9 samples (< MIN_TWAP_SAMPLES = 10) -> oracle considered unavailable.
+    setup_oracle(&env, &escrow, &admin, PRICE_SCALE, 9);
+
+    let job_id = create_priced_job(&env, &escrow, &client_addr, &freelancer, &token, 100);
+    let res = escrow.try_fund_job(&job_id, &client_addr, &100, &200);
+    assert_eq!(res, Err(Ok(EscrowError::OracleUnavailable)));
+}
+
+#[test]
+fn test_escrow_ttl_flow_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1000;
+        l.sequence_number = 1;
+    });
+
+    let (contract, client, freelancer, token, _admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+
+    // Extend TTL permissionlessly (should succeed because the job is active).
+    contract.extend_escrow_ttl(&job_id);
+
+    // Verify event is emitted.
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    let topic1: Symbol = last_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic0, symbol_short!("escrow"));
+    assert_eq!(topic1, symbol_short!("ttl_ext"));
+}
+
+#[test]
+#[should_panic]
+fn test_escrow_ttl_flow_archived_get_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1000;
+        l.sequence_number = 1;
+    });
+
+    let (contract, client, freelancer, token, _admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+
+    // Advance sequence beyond ESCROW_TTL_LEDGERS.
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 535002;
+    });
+
+    // This should panic because the job is archived.
+    let _job = contract.get_job(&job_id);
+}
+
+#[test]
+#[should_panic]
+fn test_escrow_ttl_flow_archived_extend_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1000;
+        l.sequence_number = 1;
+    });
+
+    let (contract, client, freelancer, token, _admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+
+    // Advance sequence beyond ESCROW_TTL_LEDGERS.
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 535002;
+    });
+
+    // This should panic because the job is archived.
+    contract.extend_escrow_ttl(&job_id);
+}
+
+#[test]
+fn test_escrow_ttl_flow_restore() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| {
+        l.timestamp = 1000;
+        l.sequence_number = 1;
+    });
+
+    let (contract, client, freelancer, token, _admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "Work"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+
+    // Advance sequence beyond ESCROW_TTL_LEDGERS.
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 535002;
+    });
+
+    // Simulate host-level RestoreFootprint by extending TTL before execution.
+    let key = crate::DataKey::Job(job_id);
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 1;
+    });
+    env.as_contract(&contract.address, || {
+        env.storage().persistent().extend_ttl(&key, 600000, 600000);
+    });
+    env.ledger().with_mut(|l| {
+        l.sequence_number = 535002;
+    });
+
+    // Call restore_escrow which should succeed and bump the TTL.
+    contract.restore_escrow(&job_id);
+
+    // Verify the entry is readable.
+    let _job_after = contract.get_job(&job_id);
+}
+
+// ============================================================
+// Issue #701 — Milestone amount validation tests
+// ============================================================
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")] // InvalidMilestone
+fn test_create_job_zero_amount_milestone_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, client_addr, freelancer, token, _) = setup_test(&env);
+
+    let milestones = vec![
+        &env,
+        (String::from_str(&env, "Zero milestone"), 0_i128, JOB_DEADLINE),
+    ];
+
+    contract.create_job(
+        &client_addr,
+        &freelancer,
+        &token,
+        &milestones,
+        &JOB_DEADLINE,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")] // InvalidMilestone
+fn test_create_job_negative_amount_milestone_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, client_addr, freelancer, token, _) = setup_test(&env);
+
+    let milestones = vec![
+        &env,
+        (String::from_str(&env, "Negative milestone"), -100_i128, JOB_DEADLINE),
+    ];
+
+    contract.create_job(
+        &client_addr,
+        &freelancer,
+        &token,
+        &milestones,
+        &JOB_DEADLINE,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    );
+}
+
+#[test]
+fn test_create_job_valid_milestones_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, client_addr, freelancer, token, _) = setup_test(&env);
+
+    let milestones = vec![
+        &env,
+        (String::from_str(&env, "M1"), 500_i128, JOB_DEADLINE),
+        (String::from_str(&env, "M2"), 1000_i128, JOB_DEADLINE),
+    ];
+
+    let job_id = contract.create_job(
+        &client_addr,
+        &freelancer,
+        &token,
+        &milestones,
+        &JOB_DEADLINE,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    );
+
+    let job = contract.get_job(&job_id);
+    assert_eq!(job.total_amount, 1500);
+    assert_eq!(job.milestones.len(), 2);
+}
+
+// ============================================================
+// Issue #662 — Nonce replay protection tests
+// ============================================================
+
+#[test]
+#[should_panic(expected = "Error(Contract, #46)")] // NonceReplay
+fn test_release_milestone_nonce_replay_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+
+    let (contract, client_addr, freelancer, token, _) = setup_test(&env);
+
+    let milestones = vec![
+        &env,
+        (String::from_str(&env, "M1"), 500_i128, JOB_DEADLINE),
+        (String::from_str(&env, "M2"), 500_i128, JOB_DEADLINE),
+    ];
+
+    let job_id = contract.create_job(
+        &client_addr,
+        &freelancer,
+        &token,
+        &milestones,
+        &JOB_DEADLINE,
+        &GRACE_PERIOD,
+        &DEFAULT_EXPIRY_LEDGER,
+    );
+    contract.fund_job(&job_id, &client_addr, &0, &0);
+    contract.submit_milestone(&job_id, &0, &freelancer);
+
+    // First release succeeds with nonce 42
+    contract.release_milestone(&job_id, &0, &client_addr, &0, &42);
+
+    // Submit second milestone
+    contract.submit_milestone(&job_id, &1, &freelancer);
+
+    // Replay same nonce 42 — should fail with NonceReplay
+    contract.release_milestone(&job_id, &1, &client_addr, &0, &42);
+}
+
+// ── calculate_payout tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_calculate_payout_client_wins() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::ClientWins);
+
+    assert_eq!(result.client, 965);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_freelancer_wins() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::FreelancerWins);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 965);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_both() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundBoth);
+
+    // 965 / 2 = 482 (truncated), freelancer gets 965 - 482 = 483
+    assert_eq!(result.client, 482);
+    assert_eq!(result.freelancer, 483);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_split() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // 30% to client, 70% to freelancer
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundSplit(30));
+
+    // remaining = 965, client = 965 * 30 / 100 = 289, freelancer = 965 - 289 = 676
+    assert_eq!(result.client, 289);
+    assert_eq!(result.freelancer, 676);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_split_100_percent() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundSplit(100));
+
+    assert_eq!(result.client, 965);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_refund_split_over_100_clamped() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // 200 should be clamped to 100 (all remaining to client)
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::RefundSplit(200));
+
+    assert_eq!(result.client, 965);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 25);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_escalate() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // Escalate means no payout yet — all zeros
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::Escalate);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 0);
+    assert_eq!(result.arbitrators, 0);
+}
+
+#[test]
+fn test_calculate_payout_malicious_filing() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // Full remaining + platform fee goes to treasury (platform)
+    let result = client.calculate_payout(&1000_i128, &250_u32, &100_u32, &DisputeResolution::MaliciousFiling);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    // platform = remaining (965) + platform_fee (25) = 990
+    assert_eq!(result.platform, 990);
+    assert_eq!(result.arbitrators, 10);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 1000);
+}
+
+#[test]
+fn test_calculate_payout_zero_escrow() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    let result = client.calculate_payout(&0_i128, &500_u32, &200_u32, &DisputeResolution::ClientWins);
+
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.platform, 0);
+    assert_eq!(result.arbitrators, 0);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 0);
+}
+
+#[test]
+fn test_calculate_payout_max_fee() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // 100% platform fee + 0% arbitrator fee
+    let result = client.calculate_payout(&5000_i128, &10000_u32, &0_u32, &DisputeResolution::ClientWins);
+
+    assert_eq!(result.platform, 5000);
+    assert_eq!(result.arbitrators, 0);
+    assert_eq!(result.client, 0);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 5000);
+}
+
+#[test]
+fn test_calculate_payout_rounding_client_wins() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &escrow_id);
+
+    // Amount that creates rounding in fee calculation
+    // 7 * 333 / 10000 = 2 (truncated), 7 * 333 / 10000 = 2
+    // remaining = 7 - 2 - 2 = 3
+    let result = client.calculate_payout(&7_i128, &3333_u32, &3333_u32, &DisputeResolution::ClientWins);
+
+    // platform_fee = 7 * 3333 / 10000 = 2
+    // arbitrator_fee = 7 * 3333 / 10000 = 2
+    // client = 7 - 2 - 2 = 3
+    assert_eq!(result.platform, 2);
+    assert_eq!(result.arbitrators, 2);
+    assert_eq!(result.client, 3);
+    assert_eq!(result.freelancer, 0);
+    assert_eq!(result.client + result.freelancer + result.platform + result.arbitrators, 7);
+}
+
+#[test]
+fn test_calculate_payout_sum_invariant() {
+    let env = Env::default();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let contract = EscrowContractClient::new(&env, &escrow_id);
+
+    let outcomes = [
+        DisputeResolution::ClientWins,
+        DisputeResolution::FreelancerWins,
+        DisputeResolution::RefundBoth,
+        DisputeResolution::RefundSplit(0),
+        DisputeResolution::RefundSplit(30),
+        DisputeResolution::RefundSplit(50),
+        DisputeResolution::RefundSplit(70),
+        DisputeResolution::RefundSplit(100),
+        DisputeResolution::MaliciousFiling,
+    ];
+
+    let test_amounts: [i128; 8] = [0, 1, 7, 100, 1000, 9999, 100_000, 1_000_000_000_000];
+    let fee_combos: [(u32, u32); 6] = [
+        (0, 0),
+        (100, 0),
+        (0, 100),
+        (250, 100),
+        (500, 500),
+        (1000, 500),
+    ];
+
+    for &amount in &test_amounts {
+        for &(pf, af) in &fee_combos {
+            for outcome in &outcomes {
+                let result = contract.calculate_payout(&amount, &pf, &af, outcome);
+                let sum = result.client + result.freelancer + result.platform + result.arbitrators;
+                assert_eq!(
+                    sum, amount,
+                    "sum mismatch: amount={}, pf_bps={}, af_bps={}, outcome={:?}",
+                    amount, pf, af, outcome
+                );
+            }
+        }
+    }
 }

@@ -1,3 +1,15 @@
+export type ReputationTier = "None" | "Bronze" | "Silver" | "Gold" | "Platinum";
+
+export interface BadgeTier {
+  name: ReputationTier;
+  minScore: number;
+  colour: string;
+}
+
+export interface PlatformConfig {
+  badgeTiers: BadgeTier[];
+}
+
 export interface User {
   id: string;
   walletAddress?: string | null;
@@ -13,6 +25,7 @@ export interface User {
   reviewCount?: number;
   availability?: boolean;
   completedOnboarding?: boolean;
+  availabilityStatus?: "available" | "busy" | "unavailable";
   authMethods?: {
     email: boolean;
     wallet: boolean;
@@ -157,6 +170,7 @@ export interface UserProfile extends User {
   services: ServiceListing[];
   portfolioItems?: PortfolioItem[];
   createdAt: string;
+  availability?: boolean;
 }
 
 export interface Conversation {
@@ -199,11 +213,29 @@ export interface Vote {
 
 export interface DisputeEvidence {
   id: string;
-  ipfsHash: string;
+  ipfsHash?: string;
   fileName: string;
   fileType: string;
+  size?: number;
+  sizeFormatted?: string;
+  sha256?: string;
+  anchorTxHash?: string;
   uploadedAt: string;
-  uploaderAddress: string;
+  uploaderAddress?: string;
+  url?: string;
+  uploader?: {
+    id: string;
+    username: string;
+    walletAddress?: string;
+  };
+}
+
+export interface EvidenceVerification {
+  intact: boolean;
+  storedHash: string;
+  computedHash: string;
+  anchorTxHash?: string;
+  fileName: string;
 }
 
 export interface Dispute {
@@ -224,7 +256,7 @@ export interface Dispute {
   respondent: User;
   votes: Vote[];
   evidence?: DisputeEvidence[];
-  arbitrators?: string[];
+  arbitrators?: Array<{ address: string; displayName: string; avatarUrl: string | null }>;
 }
 
 export interface Transaction {

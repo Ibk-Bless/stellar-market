@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { config } from "../config";
 import { PrismaClient, UserRole } from "@prisma/client";
 import { logger } from "../lib/logger";
+import { getCurrentTokenVersion } from "../lib/token-version";
 
 const prisma = new PrismaClient();
 
@@ -33,10 +34,26 @@ export const authenticate = async (
       userId: string;
       walletAddress?: string;
       purpose?: string;
+      tokenVersion?: number;
     };
 
     if (decoded.purpose === "2fa_pending") {
       res.status(401).json({ error: "2FA verification required." });
+      return;
+    }
+
+    // Reject tokens issued before the user's most recent password change (#787).
+    // Tokens minted prior to this feature carry no tokenVersion claim; treat
+    // them as version 0 so they stay valid until the next password change.
+    const currentTokenVersion = await getCurrentTokenVersion(decoded.userId);
+    if (
+      currentTokenVersion !== null &&
+      (decoded.tokenVersion ?? 0) !== currentTokenVersion
+    ) {
+      res.status(401).json({
+        error: "Token has been invalidated. Please log in again.",
+        code: "TokenInvalidated",
+      });
       return;
     }
 
@@ -47,11 +64,16 @@ export const authenticate = async (
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { role: true, emailVerified: true },
+      select: { role: true, emailVerified: true, deletedAt: true },
     });
 
     if (!user) {
       res.status(401).json({ error: "User not found." });
+      return;
+    }
+
+    if (user.deletedAt) {
+      res.status(401).json({ error: "Account deleted.", code: "ACCOUNT_DELETED" });
       return;
     }
 
@@ -102,17 +124,38 @@ export const requireAdmin = async (
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, config.jwtSecret) as { userId: string };
+    const decoded = jwt.verify(token, config.jwtSecret) as {
+      userId: string;
+      tokenVersion?: number;
+    };
     req.userId = decoded.userId;
+
+    // Reject tokens invalidated by a password change (#787).
+    const currentTokenVersion = await getCurrentTokenVersion(decoded.userId);
+    if (
+      currentTokenVersion !== null &&
+      (decoded.tokenVersion ?? 0) !== currentTokenVersion
+    ) {
+      res.status(401).json({
+        error: "Token has been invalidated. Please log in again.",
+        code: "TokenInvalidated",
+      });
+      return;
+    }
 
     // Query database for user role
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { role: true },
+      select: { role: true, deletedAt: true },
     });
 
     if (!user) {
       res.status(401).json({ error: "User not found." });
+      return;
+    }
+
+    if (user.deletedAt) {
+      res.status(401).json({ error: "Account deleted.", code: "ACCOUNT_DELETED" });
       return;
     }
 
@@ -128,6 +171,75 @@ export const requireAdmin = async (
   } catch {
     res.status(401).json({ error: "Invalid or expired token." });
   }
+};
+
+/**
+ * Optional authentication middleware.
+ *
+ * Identical to `authenticate` except it does NOT reject the request when no
+ * token is supplied.  Routes that are publicly accessible but need to behave
+ * differently for signed-in users (e.g. field-level projections) should use
+ * this middleware instead of `authenticate`.
+ *
+ * When a valid token is present, `req.userId` and `req.userRole` are populated
+ * exactly as they would be by `authenticate`.  When no token is present (or the
+ * token is invalid) the request continues with `req.userId === undefined`.
+ */
+export const optionalAuthenticate = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  const authHeader = req.headers.authorization;
+
+  // No token supplied — continue as anonymous
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return next();
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, config.jwtSecret) as {
+      userId: string;
+      walletAddress?: string;
+      purpose?: string;
+      tokenVersion?: number;
+    };
+
+    // A 2FA-pending token is not a full session; treat as anonymous
+    if (decoded.purpose === "2fa_pending") {
+      return next();
+    }
+
+    // A token invalidated by a password change is treated as anonymous (#787).
+    const currentTokenVersion = await getCurrentTokenVersion(decoded.userId);
+    if (
+      currentTokenVersion !== null &&
+      (decoded.tokenVersion ?? 0) !== currentTokenVersion
+    ) {
+      return next();
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { role: true, emailVerified: true, deletedAt: true },
+    });
+
+    if (!user || user.deletedAt) {
+      return next();
+    }
+
+    req.userId = decoded.userId;
+    req.userRole = user.role;
+    if (decoded.walletAddress) {
+      req.userWalletAddress = decoded.walletAddress;
+    }
+  } catch {
+    // Invalid / expired token — continue as anonymous
+  }
+
+  return next();
 };
 
 export const checkSuspension = async (

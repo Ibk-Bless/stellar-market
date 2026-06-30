@@ -2,6 +2,7 @@
 
 import { CheckCircle, Circle, FileText, Scale, Gavel, Clock } from "lucide-react";
 import type { Dispute } from "@/types";
+import LocalTimestamp from "@/components/LocalTimestamp";
 
 interface DisputeTimelineProps {
   dispute: Dispute;
@@ -84,9 +85,10 @@ export default function DisputeTimeline({ dispute }: DisputeTimelineProps) {
                 <p className="text-xs text-theme-text mt-0.5">{ev.detail}</p>
               )}
               {ev.done && (
-                <time className="text-[10px] text-theme-text-muted">
-                  {new Date(ev.timestamp).toLocaleString()}
-                </time>
+                <LocalTimestamp
+                  isoString={ev.timestamp}
+                  className="text-[10px] text-theme-text-muted"
+                />
               )}
             </div>
           </li>

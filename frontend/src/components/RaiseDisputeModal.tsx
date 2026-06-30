@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { X, AlertCircle, Loader2, Paperclip, Upload } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { X, AlertCircle, Loader2, Paperclip, Upload, Info } from "lucide-react";
 import axios, { AxiosError } from "axios";
 import { useWallet } from "@/context/WalletContext";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { Job } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 const MAX_FILES = 5;
 const MAX_FILE_SIZE_MB = 10;
@@ -44,9 +44,37 @@ export default function RaiseDisputeModal({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Escrow balance info
+  const [escrowLoading, setEscrowLoading] = useState(false);
+  const [releasedMilestones, setReleasedMilestones] = useState(0);
+  const [totalMilestones, setTotalMilestones] = useState(0);
+  const [escrowBalance, setEscrowBalance] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // Derive escrow info from the job's milestones (already loaded)
+    setEscrowLoading(true);
+    try {
+      const milestones = job.milestones ?? [];
+      const approved = milestones.filter((m) => m.status === "APPROVED").length;
+      const total = milestones.length;
+      const totalBudget = job.budget ?? 0;
+      const releasedAmount = total > 0 ? (approved / total) * totalBudget : 0;
+      const remaining = Math.max(0, totalBudget - releasedAmount);
+
+      setReleasedMilestones(approved);
+      setTotalMilestones(total);
+      setEscrowBalance(remaining);
+    } finally {
+      setEscrowLoading(false);
+    }
+  }, [isOpen, job]);
+
   if (!isOpen) return null;
 
   const isEscrowFunded = job.escrowStatus === "FUNDED";
+  const isZeroBalance = escrowBalance !== null && escrowBalance === 0;
 
   const trimmedReason = reason.trim();
   const reasonError =
@@ -145,13 +173,26 @@ export default function RaiseDisputeModal({
       const newDisputeId: string | undefined =
         confirmRes.data?.dispute?.id ?? confirmRes.data?.id;
 
-      // 4. Upload evidence files if any
       if (selectedFiles.length > 0 && newDisputeId) {
         setUploading(true);
         setUploadProgress(0);
 
+        const hashes: string[] = [];
+        for (const file of selectedFiles) {
+          const buffer = await file.arrayBuffer();
+          const hashBuffer = await window.crypto.subtle.digest(
+            "SHA-256",
+            buffer,
+          );
+          const hex = Array.from(new Uint8Array(hashBuffer))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join("");
+          hashes.push(hex);
+        }
+
         const formData = new FormData();
         selectedFiles.forEach((file) => formData.append("files", file));
+        formData.append("hashes", JSON.stringify(hashes));
 
         try {
           await axios.post(
@@ -173,7 +214,6 @@ export default function RaiseDisputeModal({
             },
           );
         } catch {
-          // Evidence upload failure is non-blocking — dispute already created
           setError(
             "Dispute created, but evidence upload failed. You can retry from the dispute page.",
           );
@@ -221,6 +261,38 @@ export default function RaiseDisputeModal({
         </div>
 
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {/* Escrow Balance Summary */}
+          {escrowLoading ? (
+            <div className="flex items-center gap-2 p-3 bg-theme-border/20 rounded-lg text-sm text-theme-text">
+              <Loader2 size={14} className="animate-spin" /> Loading escrow details…
+            </div>
+          ) : escrowBalance !== null && (
+            <div className={`p-3 rounded-lg border text-sm ${
+              isZeroBalance
+                ? "bg-theme-error/10 border-theme-error/20 text-theme-error"
+                : "bg-stellar-blue/5 border-stellar-blue/20 text-theme-text"
+            }`}>
+              <div className="flex items-start gap-2">
+                <Info size={15} className="flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-theme-heading">
+                    Escrow balance: {escrowBalance.toLocaleString()} XLM
+                    {totalMilestones > 0 && (
+                      <span className="font-normal text-theme-text">
+                        {" "}— {releasedMilestones} of {totalMilestones} milestone{totalMilestones !== 1 ? "s" : ""} released
+                      </span>
+                    )}
+                  </p>
+                  {isZeroBalance && (
+                    <p className="mt-1">
+                      This escrow has no remaining balance. Raising a dispute will not result in a payout.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {error && (
             <div className="p-3 text-sm text-theme-error bg-theme-error/10 border border-theme-error/20 rounded-lg">
               {error}

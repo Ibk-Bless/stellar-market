@@ -51,7 +51,7 @@ export default function AuthForm({ type }: AuthFormProps) {
     setIsLoading(true);
     setError(null);
 
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
     try {
       const response = await fetch(`${API}/auth/2fa/validate`, {
@@ -75,7 +75,7 @@ export default function AuthForm({ type }: AuthFormProps) {
     setIsLoading(true);
     setError(null);
 
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
     try {
       if (type === "login") {
@@ -131,7 +131,7 @@ export default function AuthForm({ type }: AuthFormProps) {
   const handleWalletLogin = async () => {
     setIsLoading(true);
     setError(null);
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
     try {
       let publicKey = address;
@@ -335,7 +335,12 @@ export default function AuthForm({ type }: AuthFormProps) {
                   Please unlock your Freighter wallet and try again.
                 </p>
               )}
-              {walletError && walletError !== "NOT_INSTALLED" && walletError !== "LOCKED" && (
+              {walletError === "TIMEOUT" && (
+                <p className="text-xs text-theme-error mt-1">
+                  Wallet connection timed out. Make sure Freighter is unlocked and try again.
+                </p>
+              )}
+              {walletError && walletError !== "NOT_INSTALLED" && walletError !== "LOCKED" && walletError !== "TIMEOUT" && (
                 <p className="text-xs text-theme-error mt-1">{walletError}</p>
               )}
               {!address && !walletError && type === "register" && (

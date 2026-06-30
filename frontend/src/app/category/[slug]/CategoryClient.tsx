@@ -26,7 +26,7 @@ import EmptyState from "@/components/EmptyState";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { Job, PaginatedResponse, User } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const JOBS_PER_PAGE = 10;
 
 const CATEGORY_ICONS: Record<string, React.ElementType> = {

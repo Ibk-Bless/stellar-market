@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Notification, NotificationType } from "@/types";
 import { formatRelativeTime } from "@/utils/date";
+import { formatLocalTimestamp, formatUtcTimestamp } from "@/components/LocalTimestamp";
 
 interface NotificationItemProps {
   notification: Notification;
@@ -102,9 +103,13 @@ export default function NotificationItem({
         <p className="text-xs text-theme-text line-clamp-2 mt-0.5">
           {notification.message}
         </p>
-        <p className="text-[10px] text-theme-text/60 mt-1">
+        <time
+          dateTime={notification.createdAt}
+          title={`${formatLocalTimestamp(notification.createdAt)} · ${formatUtcTimestamp(notification.createdAt)}`}
+          className="text-[10px] text-theme-text/60 mt-1 block"
+        >
           {formatRelativeTime(notification.createdAt)}
-        </p>
+        </time>
       </div>
     </Link>
   );

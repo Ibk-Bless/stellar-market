@@ -9,8 +9,11 @@ import { useWallet } from "@/context/WalletContext";
 import { useAuth } from "@/context/AuthContext";
 import { Dispute, Vote } from "@/types";
 import DisputeVoteProgress from "@/components/DisputeVoteProgress";
+import EvidenceViewer from "@/components/EvidenceViewer";
+import EvidenceUpload from "@/components/EvidenceUpload";
+import DisputeOutcomeBanner from "@/components/DisputeOutcomeBanner";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 export default function DisputeDetailPage() {
   const { id } = useParams();
@@ -194,6 +197,10 @@ export default function DisputeDetailPage() {
         </div>
       )}
 
+      <div className="mb-6">
+        <DisputeOutcomeBanner status={dispute.status} />
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Content */}
         <div className="lg:col-span-2 space-y-6">
@@ -226,6 +233,19 @@ export default function DisputeDetailPage() {
               </p>
             </div>
             
+            <EvidenceViewer disputeId={dispute.id} />
+
+            {isParticipant &&
+              dispute.status !== "RESOLVED_CLIENT" &&
+              dispute.status !== "RESOLVED_FREELANCER" && (
+                <div className="card">
+                  <EvidenceUpload
+                    disputeId={dispute.id}
+                    onUploadComplete={fetchDispute}
+                  />
+                </div>
+              )}
+
             <h2 className="text-xl font-bold text-theme-heading mb-4 border-b border-theme-border pb-2">
               Community Votes
             </h2>
@@ -258,6 +278,34 @@ export default function DisputeDetailPage() {
         <div className="space-y-6">
           {/* Real-time Vote Progress Component */}
           <DisputeVoteProgress disputeId={id as string} showVoterDetails={true} />
+          
+          <div className="card">
+            <h3 className="font-semibold text-theme-heading mb-4 flex items-center gap-2">
+              <ShieldCheck className="text-stellar-blue" size={18} />
+              Assigned Arbitrators
+            </h3>
+            <div className="space-y-3">
+              {dispute.arbitrators && dispute.arbitrators.length > 0 ? (
+                dispute.arbitrators.map((arb) => (
+                  <div key={arb.address} className="flex items-center gap-3 p-2 bg-theme-bg-secondary border border-theme-border rounded-lg">
+                    {arb.avatarUrl ? (
+                      <img src={arb.avatarUrl} alt={arb.displayName} className="w-8 h-8 rounded-full object-cover" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-stellar-blue/10 text-stellar-blue flex items-center justify-center font-bold text-sm">
+                        {arb.displayName[0].toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-theme-heading truncate">{arb.displayName}</p>
+                      <p className="text-[10px] text-theme-text-muted font-mono truncate">{arb.address}</p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-theme-text-muted italic text-center py-2">No arbitrators assigned.</p>
+              )}
+            </div>
+          </div>
           
           <div className="card border-theme-border border-2">
             <h3 className="font-semibold text-theme-heading mb-4 flex items-center justify-center gap-2 text-lg">

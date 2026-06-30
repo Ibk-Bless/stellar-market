@@ -59,7 +59,7 @@ export class CircuitBreaker {
   onSuccess(): void {
     if (this.state !== "CLOSED") {
       logger.info(
-        { name: this.name, previousState: this.state },
+        { name: this.name, previousState: this.state, metric: "rpc_circuit_closed" },
         `[${this.name}] Circuit closed — service recovered`,
       );
     }
@@ -79,7 +79,7 @@ export class CircuitBreaker {
       this.openedAt = Date.now();
       this.reconnectAttempts += 1;
       logger.warn(
-        { name: this.name, consecutiveFailures: this.consecutiveFailures },
+        { name: this.name, consecutiveFailures: this.consecutiveFailures, metric: "rpc_circuit_open" },
         `[${this.name}] Circuit reopened after failed probe`,
       );
       return;
@@ -96,6 +96,7 @@ export class CircuitBreaker {
         {
           name: this.name,
           consecutiveFailures: this.consecutiveFailures,
+          metric: "rpc_circuit_open",
           [`${this.name.toLowerCase().replace(/\s+/g, "_")}_reconnects_total`]:
             this.reconnectAttempts,
         },

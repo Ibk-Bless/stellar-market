@@ -17,6 +17,36 @@ import {
 } from "@stellar/freighter-api";
 import { rpc, Transaction, Horizon } from "@stellar/stellar-sdk";
 import { Loader2, QrCode, Wallet, Smartphone } from "lucide-react";
+import { useToast } from "@/components/Toast";
+
+export class FreighterTimeoutError extends Error {
+  constructor() {
+    super("Wallet connection timed out. Make sure Freighter is unlocked and try again.");
+    this.name = "FreighterTimeoutError";
+  }
+}
+
+async function getPublicKey(): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const api = require("@stellar/freighter-api");
+  if (api.getPublicKey) {
+    const res = await api.getPublicKey();
+    if (typeof res === "string") return res;
+    if (res && res.address) return res.address;
+    if (res && res.error) throw new Error(res.error);
+    return res;
+  }
+  
+  const result = await getAddress();
+  if (result.error) {
+    throw new Error(
+      typeof result.error === "string"
+        ? result.error
+        : (result.error as any).message || "Failed to retrieve address"
+    );
+  }
+  return result.address;
+}
 
 interface WalletBalance {
   asset: string;
@@ -59,6 +89,7 @@ interface WalletState {
   isSessionActive: boolean;
   sessionExpiresIn: number | null;
   extendSession: () => void;
+  isReconnecting: boolean;
 }
 
 const WalletContext = createContext<WalletState | undefined>(undefined);
@@ -66,6 +97,7 @@ const WalletContext = createContext<WalletState | undefined>(undefined);
 const STORAGE_KEY = "stellarmarket_wallet_connected";
 const WALLET_TYPE_KEY = "stellarmarket_wallet_type";
 const SESSION_KEY = "stellarmarket_wallet_session";
+const FREIGHTER_WALLET_KEY = "stellar_wallet";
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_WARNING_MS = 5 * 60 * 1000;
 
@@ -82,6 +114,7 @@ const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
 const MAINNET_PASSPHRASE = "Public Global Stellar Network ; September 2015";
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
+  const { toast } = useToast();
   const [address, setAddress] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isFreighterInstalled, setIsFreighterInstalled] = useState<boolean | null>(null);
@@ -97,7 +130,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const pendingDisconnectResolve = useRef<((value: string | null) => void) | null>(null);
   const switchingToProvider = useRef<WalletProviderType | null>(null);
 
-  const balanceRefreshInterval = useRef<NodeJS.Timeout | null>(null);
   const sessionTimeoutId = useRef<NodeJS.Timeout | null>(null);
   const sessionWarningId = useRef<NodeJS.Timeout | null>(null);
   const sessionCheckInterval = useRef<NodeJS.Timeout | null>(null);
@@ -137,6 +169,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [sessionExpiresIn, setSessionExpiresIn] = useState<number | null>(null);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   // Session management functions
   const getStoredSession = useCallback((): WalletSession | null => {
@@ -300,19 +333,55 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (sessionAge > SESSION_TIMEOUT_MS) {
       clearSession();
       localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(FREIGHTER_WALLET_KEY);
       return;
     }
 
     const installed = await checkFreighterInstalled();
-    if (!installed) return;
+    if (!installed) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(FREIGHTER_WALLET_KEY);
+      clearSession();
+      return;
+    }
 
+    setIsReconnecting(true);
     try {
+      const connectedResult = await freighterIsConnected();
+      if (connectedResult.error || !connectedResult.isConnected) {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(WALLET_TYPE_KEY);
+        localStorage.removeItem(FREIGHTER_WALLET_KEY);
+        clearSession();
+        return;
+      }
+
       const result = await getAddress();
       if (result.error) {
         localStorage.removeItem(STORAGE_KEY);
         localStorage.removeItem(WALLET_TYPE_KEY);
+        localStorage.removeItem(FREIGHTER_WALLET_KEY);
+        clearSession();
         return;
       }
+
+      const storedFreighterWallet = (() => {
+        try {
+          const raw = localStorage.getItem(FREIGHTER_WALLET_KEY);
+          return raw ? (JSON.parse(raw) as { walletAddress: string; connectedAt: number }) : null;
+        } catch {
+          return null;
+        }
+      })();
+
+      if (storedFreighterWallet && storedFreighterWallet.walletAddress !== result.address) {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(WALLET_TYPE_KEY);
+        localStorage.removeItem(FREIGHTER_WALLET_KEY);
+        clearSession();
+        return;
+      }
+
       setAddress(result.address);
       setWalletType("freighter");
       saveSession(result.address);
@@ -320,6 +389,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } catch {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(WALLET_TYPE_KEY);
+      localStorage.removeItem(FREIGHTER_WALLET_KEY);
+      clearSession();
+    } finally {
+      setIsReconnecting(false);
     }
   }, [checkFreighterInstalled, getWalletKit, getStoredSession, clearSession, saveSession, updateSessionActivity]);
 
@@ -327,20 +400,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     restoreSession();
   }, [restoreSession]);
 
-  // Fetch balance when address changes
+  // Fetch balance when the connected address changes. We intentionally avoid a
+  // fixed polling interval here (which fired even when the tab was idle and was
+  // the source of redundant Horizon calls); the header balance is kept fresh by
+  // the cached useWalletBalance hook (30s stale-time + refetch-on-focus), and
+  // other consumers refresh explicitly via refreshBalance after transactions.
   useEffect(() => {
     if (address) {
       refreshBalance();
-      balanceRefreshInterval.current = setInterval(refreshBalance, 30000);
     } else {
       setBalance(null);
       setBalances([]);
     }
-    return () => {
-      if (balanceRefreshInterval.current) {
-        clearInterval(balanceRefreshInterval.current);
-      }
-    };
   }, [address, refreshBalance]);
 
   // Listen for Freighter account changes
@@ -428,40 +499,53 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         setError("NOT_INSTALLED");
         return null;
       }
-      const accessResult = await requestAccess();
-      if (accessResult.error) {
-        const msg = typeof accessResult.error === "string"
-          ? accessResult.error
-          : ((accessResult.error as { message?: string }).message ?? "");
-        if (msg.toLowerCase().includes("locked") || msg.toLowerCase().includes("unlock")) {
-          setError("LOCKED");
-        } else {
-          setError(msg || "Failed to connect wallet");
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new FreighterTimeoutError()), 10000)
+      );
+
+      const pubKeyPromise = (async () => {
+        const accessResult = await requestAccess();
+        if (accessResult.error) {
+          throw new Error(
+            typeof accessResult.error === "string"
+              ? accessResult.error
+              : ((accessResult.error as { message?: string }).message ?? "")
+          );
         }
-        return null;
-      }
-      const addressResult = await getAddress();
-      if (addressResult.error) {
-        const msg = typeof addressResult.error === "string"
-          ? addressResult.error
-          : ((addressResult.error as { message?: string }).message ?? "");
-        setError(msg || "Failed to retrieve address");
-        return null;
-      }
-      setAddress(addressResult.address);
+        return await getPublicKey();
+      })();
+
+      const addressResult = await Promise.race([
+        pubKeyPromise,
+        timeoutPromise,
+      ]);
+
+      setAddress(addressResult);
       setWalletType("freighter");
       localStorage.setItem(STORAGE_KEY, "true");
       localStorage.setItem(WALLET_TYPE_KEY, "freighter");
-      saveSession(addressResult.address);
+      localStorage.setItem(FREIGHTER_WALLET_KEY, JSON.stringify({ walletAddress: addressResult, connectedAt: Date.now() }));
+      saveSession(addressResult);
       updateSessionActivity();
-      return addressResult.address;
-    } catch {
-      setError("An unexpected error occurred while connecting the wallet");
+      return addressResult;
+    } catch (err: unknown) {
+      if (err instanceof FreighterTimeoutError) {
+        setError("TIMEOUT");
+        toast.error("Wallet connection timed out. Make sure Freighter is unlocked and try again.");
+      } else {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.toLowerCase().includes("locked") || errMsg.toLowerCase().includes("unlock")) {
+          setError("LOCKED");
+        } else {
+          setError(errMsg || "An unexpected error occurred while connecting the wallet");
+        }
+      }
       return null;
     } finally {
       setIsConnecting(false);
     }
-  }, [checkFreighterInstalled, saveSession, updateSessionActivity]);
+  }, [checkFreighterInstalled, saveSession, updateSessionActivity, toast]);
 
   const connectWalletConnect = useCallback(async () => {
     setError(null);
@@ -590,6 +674,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setWalletType(null);
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(WALLET_TYPE_KEY);
+    localStorage.removeItem(FREIGHTER_WALLET_KEY);
     clearSession();
     window.dispatchEvent(new CustomEvent("stellarmarket:walletDisconnected"));
   }, [clearSession]);
@@ -634,7 +719,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (!address) {
       return { success: false, error: "No wallet connected. Connect a wallet first." };
     }
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
     try {
       // Step 1 — fetch a one-time challenge from the server
       const challengeRes = await fetch(`${API}/auth/wallet/challenge`, {
@@ -748,6 +833,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       walletType,
       isSessionActive,
       sessionExpiresIn,
+      isReconnecting,
       connect,
       disconnect,
       refreshBalance,
@@ -759,6 +845,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [
       address, isConnecting, isFreighterInstalled, isLobstrInstalled, error,
       balance, balances, isLoadingBalance, walletType, isSessionActive, sessionExpiresIn,
+      isReconnecting,
       connect, disconnect, refreshBalance, signMessage, bindWallet, signAndBroadcastTransaction,
       updateSessionActivity,
     ],
@@ -767,6 +854,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   return (
     <WalletContext.Provider value={value}>
       {children}
+
+      {/* Reconnecting wallet banner */}
+      {isReconnecting && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[130] flex items-center gap-2 rounded-lg border border-theme-border bg-theme-card px-4 py-2 text-sm text-theme-text shadow-lg">
+          <Loader2 size={14} className="animate-spin" />
+          Reconnecting wallet&hellip;
+        </div>
+      )}
 
       {/* Wallet selection modal */}
       {showWalletSelect && (
@@ -909,6 +1004,27 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
               <h2 className="text-lg font-semibold text-theme-heading">Wallet locked</h2>
               <p className="text-sm text-theme-text mt-1">
                 Please unlock your Freighter wallet and try again.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setError(null)}
+              className="w-full rounded-lg bg-stellar-blue px-4 py-2 text-sm text-white hover:bg-stellar-blue/90"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Timeout wallet error */}
+      {error === "TIMEOUT" && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-lg border border-theme-border bg-theme-card p-5 shadow-xl">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold text-theme-heading">Connection timed out</h2>
+              <p className="text-sm text-theme-text mt-1">
+                Wallet connection timed out. Make sure Freighter is unlocked and try again.
               </p>
             </div>
             <button

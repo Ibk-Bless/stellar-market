@@ -94,3 +94,41 @@ router.delete(
 );
 
 export default router;
+
+// Subscribe to push notifications
+router.post(
+  "/push/subscribe",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { endpoint, keys } = req.body;
+
+    if (!endpoint || !keys?.p256dh || !keys?.auth) {
+      return res.status(400).json({ error: "Invalid push subscription data." });
+    }
+
+    await NotificationService.subscribeToPush(req.userId!, {
+      endpoint,
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+    });
+
+    res.status(201).json({ message: "Successfully subscribed to push notifications." });
+  }),
+);
+
+// Unsubscribe from push notifications
+router.delete(
+  "/push/unsubscribe",
+  authenticate,
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { endpoint } = req.body;
+
+    if (!endpoint) {
+      return res.status(400).json({ error: "Endpoint is required." });
+    }
+
+    await NotificationService.unsubscribeFromPush(req.userId!, endpoint);
+
+    res.status(200).json({ message: "Successfully unsubscribed from push notifications." });
+  }),
+);

@@ -135,6 +135,17 @@ export function useJobFilters() {
     syncToUrl(DEFAULTS);
   }, [syncToUrl]);
 
+  // Keep a search query while removing the narrowing filters. This is useful
+  // from the zero-results state: users can broaden a search without retyping it.
+  const clearFilters = useCallback(() => {
+    setFilters((prev) => {
+      const next = { ...DEFAULTS, search: prev.search };
+      setDebouncedSearch(prev.search);
+      syncToUrl(next);
+      return next;
+    });
+  }, [syncToUrl]);
+
   const activeCount = useMemo(() => {
     let count = 0;
     if (filters.category !== "All") count++;
@@ -173,6 +184,7 @@ export function useJobFilters() {
     updateSearch,
     toggleArrayFilter,
     clearAll,
+    clearFilters,
     activeCount,
     postedAfterDate,
   };

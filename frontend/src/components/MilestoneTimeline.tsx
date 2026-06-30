@@ -1,5 +1,7 @@
 "use client";
 
+import type { ChangeEvent } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckCircle,
   Loader2,
@@ -8,16 +10,40 @@ import {
   DollarSign,
   Clock,
   AlertTriangle,
+  WifiOff,
 } from "lucide-react";
 
 import StatusBadge from "@/components/StatusBadge";
 import type { Milestone } from "@/types";
+import { useOfflineStatus } from "@/hooks/useOfflineStatus";
+import { formatLocalTimestamp, formatUtcTimestamp } from "@/components/LocalTimestamp";
+
+const DRAFT_SAVE_DELAY_MS = 2000;
+
+export type MilestoneSubmissionDraft = {
+  description: string;
+  links: string;
+  attachmentNames: string[];
+};
+
+const emptySubmissionDraft: MilestoneSubmissionDraft = {
+  description: "",
+  links: "",
+  attachmentNames: [],
+};
+
+export function getMilestoneDraftKey(jobId: string, milestoneIndex: number) {
+  return `milestone_draft_${jobId}_${milestoneIndex}`;
+}
 
 type MilestoneTimelineProps = {
   milestones: Milestone[];
   isClient: boolean;
   isFreelancerOnJob: boolean;
-  onSubmitMilestone: (milestoneId: string) => void;
+  onSubmitMilestone: (
+    milestoneId: string,
+    draft?: MilestoneSubmissionDraft,
+  ) => void;
   onApproveMilestone: (milestoneId: string) => void;
   onRequestRevision: (milestoneId: string) => void;
   actioningMilestoneId: string | null;
@@ -74,8 +100,231 @@ function formatDeadline(deadline: string | Date | null | undefined): string {
   } else if (diffDays <= 7) {
     return `Due in ${diffDays} days`;
   } else {
-    return date.toLocaleDateString();
+    return formatLocalTimestamp(String(deadline));
   }
+}
+
+function getDeadlineUtcTitle(deadline: string | Date | null | undefined): string | undefined {
+  if (!deadline) return undefined;
+  return formatUtcTimestamp(String(deadline));
+}
+
+function hasDraftContent(draft: MilestoneSubmissionDraft) {
+  return (
+    draft.description.trim().length > 0 ||
+    draft.links.trim().length > 0 ||
+    draft.attachmentNames.length > 0
+  );
+}
+
+type MilestoneSubmissionFormProps = {
+  milestone: Milestone;
+  milestoneIndex: number;
+  isActioning: boolean;
+  isOffline: boolean;
+  onSubmitMilestone: (
+    milestoneId: string,
+    draft?: MilestoneSubmissionDraft,
+  ) => void;
+};
+
+function MilestoneSubmissionForm({
+  milestone,
+  milestoneIndex,
+  isActioning,
+  isOffline,
+  onSubmitMilestone,
+}: MilestoneSubmissionFormProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [draft, setDraft] = useState<MilestoneSubmissionDraft>(
+    emptySubmissionDraft,
+  );
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftKey = getMilestoneDraftKey(milestone.jobId, milestoneIndex);
+
+  useEffect(() => {
+    try {
+      const savedDraft = window.localStorage.getItem(draftKey);
+      if (!savedDraft) return;
+
+      const parsed = JSON.parse(savedDraft) as Partial<MilestoneSubmissionDraft>;
+      const restoredDraft = {
+        description: parsed.description ?? "",
+        links: parsed.links ?? "",
+        attachmentNames: Array.isArray(parsed.attachmentNames)
+          ? parsed.attachmentNames.filter((name) => typeof name === "string")
+          : [],
+      };
+
+      setDraft(restoredDraft);
+      setDraftRestored(true);
+      setIsOpen(true);
+    } catch {
+      window.localStorage.removeItem(draftKey);
+    }
+  }, [draftKey]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        if (hasDraftContent(draft)) {
+          window.localStorage.setItem(draftKey, JSON.stringify(draft));
+        } else {
+          window.localStorage.removeItem(draftKey);
+        }
+      } catch {
+        // Ignore storage errors so milestone submission remains usable.
+      }
+    }, DRAFT_SAVE_DELAY_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [draft, draftKey]);
+
+  const discardDraft = () => {
+    window.localStorage.removeItem(draftKey);
+    setDraft(emptySubmissionDraft);
+    setDraftRestored(false);
+  };
+
+  const handleFilesChange = (event: ChangeEvent<HTMLInputElement>) => {
+    setDraft((current) => ({
+      ...current,
+      attachmentNames: Array.from(event.target.files ?? []).map(
+        (file) => file.name,
+      ),
+    }));
+  };
+
+  if (!isOpen) {
+    return (
+      <div className="relative group">
+        <button
+          type="button"
+          disabled={isActioning || isOffline}
+          onClick={() => setIsOpen(true)}
+          className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isActioning ? (
+            <Loader2 className="animate-spin" size={14} />
+          ) : isOffline ? (
+            <WifiOff size={14} />
+          ) : (
+            <CheckCircle size={14} />
+          )}
+          Submit Milestone
+        </button>
+        {isOffline && (
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            Blockchain transactions require an internet connection
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full rounded-lg border border-theme-border bg-theme-card p-3">
+      {draftRestored && (
+        <div
+          role="status"
+          className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-theme-info/30 bg-theme-info/10 px-3 py-2 text-xs text-theme-heading"
+        >
+          <span>Draft restored</span>
+          <button
+            type="button"
+            onClick={discardDraft}
+            className="font-semibold text-stellar-blue hover:underline"
+          >
+            Discard draft
+          </button>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-theme-heading">
+            Description
+          </span>
+          <textarea
+            value={draft.description}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                description: event.target.value,
+              }))
+            }
+            rows={3}
+            className="w-full rounded-md border border-theme-border bg-theme-bg px-3 py-2 text-sm text-theme-heading focus:border-stellar-blue focus:outline-none"
+            placeholder="Summarize what is ready for review."
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-theme-heading">
+            Links
+          </span>
+          <textarea
+            value={draft.links}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                links: event.target.value,
+              }))
+            }
+            rows={2}
+            className="w-full rounded-md border border-theme-border bg-theme-bg px-3 py-2 text-sm text-theme-heading focus:border-stellar-blue focus:outline-none"
+            placeholder="Add review links, one per line."
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-theme-heading">
+            Attachments
+          </span>
+          <input
+            type="file"
+            multiple
+            onChange={handleFilesChange}
+            className="block w-full text-xs text-theme-text file:mr-3 file:rounded-md file:border-0 file:bg-stellar-blue file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+          />
+        </label>
+
+        {draft.attachmentNames.length > 0 && (
+          <ul className="space-y-1 text-xs text-theme-text">
+            {draft.attachmentNames.map((name) => (
+              <li key={name}>{name}</li>
+            ))}
+          </ul>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={isActioning || isOffline}
+            onClick={() => onSubmitMilestone(milestone.id, draft)}
+            className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isActioning ? (
+              <Loader2 className="animate-spin" size={14} />
+            ) : isOffline ? (
+              <WifiOff size={14} />
+            ) : (
+              <CheckCircle size={14} />
+            )}
+            Submit Milestone
+          </button>
+          <button
+            type="button"
+            disabled={isActioning}
+            onClick={() => setIsOpen(false)}
+            className="btn-secondary py-1.5 text-xs disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function MilestoneTimeline({
@@ -89,6 +338,8 @@ export default function MilestoneTimeline({
   recentlyApprovedMilestoneId,
   confirmingMilestoneId,
 }: MilestoneTimelineProps) {
+  const { isOnline } = useOfflineStatus();
+  const isOffline = !isOnline;
   const completedCount = milestones.filter(
     (m) => m.status === "APPROVED",
   ).length;
@@ -96,6 +347,20 @@ export default function MilestoneTimeline({
   const progressPct = totalCount
     ? Math.round((completedCount / totalCount) * 100)
     : 0;
+
+  useEffect(() => {
+    try {
+      milestones.forEach((milestone, index) => {
+        if (milestone.status !== "IN_PROGRESS") {
+          window.localStorage.removeItem(
+            getMilestoneDraftKey(milestone.jobId, index),
+          );
+        }
+      });
+    } catch {
+      // Ignore storage errors so timeline status updates keep rendering.
+    }
+  }, [milestones]);
 
   return (
     <div className="space-y-5">
@@ -185,6 +450,7 @@ export default function MilestoneTimeline({
                         </span>
                         {(milestone.contractDeadline) && (
                           <span
+                            title={getDeadlineUtcTitle(milestone.contractDeadline)}
                             className={`text-xs flex items-center gap-1 ${
                               milestoneOverdue &&
                               milestone.status !== "APPROVED"
@@ -227,36 +493,39 @@ export default function MilestoneTimeline({
                   <div className="mt-4 flex flex-wrap gap-2">
                     {isFreelancerOnJob &&
                       milestone.status === "IN_PROGRESS" && (
-                        <button
-                          type="button"
-                          disabled={isActioning}
-                          onClick={() => onSubmitMilestone(milestone.id)}
-                          className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50"
-                        >
-                          {isActioning ? (
-                            <Loader2 className="animate-spin" size={14} />
-                          ) : (
-                            <CheckCircle size={14} />
-                          )}
-                          Submit Milestone
-                        </button>
+                        <MilestoneSubmissionForm
+                          milestone={milestone}
+                          milestoneIndex={index}
+                          isActioning={isActioning}
+                          isOffline={isOffline}
+                          onSubmitMilestone={onSubmitMilestone}
+                        />
                       )}
 
                     {isClient && milestone.status === "SUBMITTED" && (
                       <>
-                        <button
-                          type="button"
-                          disabled={isActioning}
-                          onClick={() => onApproveMilestone(milestone.id)}
-                          className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50"
-                        >
-                          {isActioning ? (
-                            <Loader2 className="animate-spin" size={14} />
-                          ) : (
-                            <ShieldCheck size={14} />
+                        <div className="relative group">
+                          <button
+                            type="button"
+                            disabled={isActioning || isOffline}
+                            onClick={() => onApproveMilestone(milestone.id)}
+                            className="btn-primary py-1.5 text-xs flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isActioning ? (
+                              <Loader2 className="animate-spin" size={14} />
+                            ) : isOffline ? (
+                              <WifiOff size={14} />
+                            ) : (
+                              <ShieldCheck size={14} />
+                            )}
+                            Approve
+                          </button>
+                          {isOffline && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                              Blockchain transactions require an internet connection
+                            </div>
                           )}
-                          Approve
-                        </button>
+                        </div>
                         <button
                           type="button"
                           disabled={isActioning}

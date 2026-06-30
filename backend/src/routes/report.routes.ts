@@ -26,7 +26,12 @@ const AUTO_FLAG_THRESHOLD = 3;
 const reportRateLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
-  keyGenerator: (req) => (req as AuthRequest).userId ?? req.ip ?? "anon",
+  keyGenerator: (req) => {
+    const userId = (req as AuthRequest).userId;
+    if (userId) return String(userId);
+    return (req.ip ?? req.socket?.remoteAddress ?? "anon").replace(/^::ffff:/i, "");
+  },
+  validate: { ip: false }, // IP is normalized in keyGenerator above
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, res) => {

@@ -11,7 +11,7 @@ import Pagination from "@/components/Pagination";
 import DisputeCardSkeleton from "@/components/skeletons/DisputeCardSkeleton";
 import { Dispute, PaginatedResponse } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const ITEMS_PER_PAGE = 10;
 
 type TabType = "my-disputes" | "my-votes" | "open-for-voting";

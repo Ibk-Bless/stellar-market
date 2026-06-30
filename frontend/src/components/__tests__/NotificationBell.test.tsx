@@ -1,8 +1,25 @@
 import "@testing-library/jest-dom";
 import React from "react";
-import { render, screen, act, waitFor } from "@testing-library/react";
+import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 import NotificationBell from "@/components/NotificationBell";
 import axios from "axios";
+
+const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+
+// Route axios.get responses by URL so the unread-count poll and the dropdown
+// list fetch can both be served in a single test.
+function mockAxiosByUrl(opts: { count?: number; notifications?: unknown[] } = {}) {
+  const { count = 0, notifications = [] } = opts;
+  (axios.get as jest.Mock).mockImplementation((url: string) => {
+    if (url.includes("/unread-count")) return Promise.resolve({ data: { count } });
+    if (url.includes("/notifications")) {
+      return Promise.resolve({
+        data: { data: notifications, total: notifications.length, page: 1, totalPages: 1 },
+      });
+    }
+    return Promise.resolve({ data: {} });
+  });
+}
 
 // ─── Mock axios ───────────────────────────────────────────────────────────────
 jest.mock("axios");
@@ -128,5 +145,94 @@ describe("NotificationBell", () => {
     await waitFor(() => {
       expect(screen.getByText("10")).toBeInTheDocument();
     });
+  });
+
+  it("opens a dropdown listing recent notifications when the bell is clicked", async () => {
+    mockAxiosByUrl({
+      count: 2,
+      notifications: [
+        { id: "n1", userId: "1", type: "NEW_MESSAGE", title: "New message", message: "Hi", read: false, createdAt: daysAgo(1), metadata: { jobId: "j1" } },
+      ],
+    });
+
+    await act(async () => {
+      render(<NotificationBell />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Notifications"));
+    });
+
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(screen.getByText("New message")).toBeInTheDocument();
+  });
+
+  it("hides notifications older than 30 days", async () => {
+    mockAxiosByUrl({
+      count: 1,
+      notifications: [
+        { id: "fresh", userId: "1", type: "NEW_MESSAGE", title: "Fresh note", message: "x", read: false, createdAt: daysAgo(2), metadata: {} },
+        { id: "stale", userId: "1", type: "NEW_MESSAGE", title: "Stale note", message: "x", read: false, createdAt: daysAgo(40), metadata: {} },
+      ],
+    });
+
+    await act(async () => {
+      render(<NotificationBell />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Notifications"));
+    });
+
+    await waitFor(() => expect(screen.getByText("Fresh note")).toBeInTheDocument());
+    expect(screen.queryByText("Stale note")).not.toBeInTheDocument();
+  });
+
+  it("marks all as read and clears the badge", async () => {
+    mockAxiosByUrl({
+      count: 3,
+      notifications: [
+        { id: "n1", userId: "1", type: "NEW_MESSAGE", title: "One", message: "x", read: false, createdAt: daysAgo(1), metadata: {} },
+      ],
+    });
+    (axios.put as jest.Mock).mockResolvedValue({ data: {} });
+
+    await act(async () => {
+      render(<NotificationBell />);
+    });
+    await waitFor(() => expect(screen.getByText("3")).toBeInTheDocument());
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Notifications"));
+    });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Mark all as read"));
+    });
+
+    expect(axios.put).toHaveBeenCalledWith(
+      expect.stringContaining("/notifications/read-all"),
+      {},
+      expect.anything(),
+    );
+    expect(screen.queryByText("3")).not.toBeInTheDocument();
+  });
+
+  it("closes the dropdown on Escape", async () => {
+    mockAxiosByUrl({ count: 0, notifications: [] });
+
+    await act(async () => {
+      render(<NotificationBell />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Notifications"));
+    });
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

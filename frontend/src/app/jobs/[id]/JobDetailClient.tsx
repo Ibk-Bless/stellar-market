@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
+import { useQuery, useQueryClient, useInfiniteQuery } from "@tanstack/react-query";
 import {
   Clock,
   DollarSign,
@@ -15,6 +16,7 @@ import {
   XCircle,
   PencilLine,
   Star,
+  ChevronDown,
 } from "lucide-react";
 import Link from "next/link";
 import axios from "axios";
@@ -25,9 +27,12 @@ import StatusBadge from "@/components/StatusBadge";
 import ApplyModal from "@/components/ApplyModal";
 import RaiseDisputeModal from "@/components/RaiseDisputeModal";
 import ReviewModal from "@/components/ReviewModal";
-import MilestoneTimeline from "@/components/MilestoneTimeline";
+import MilestoneTimeline, {
+  getMilestoneDraftKey,
+} from "@/components/MilestoneTimeline";
 import MilestoneProgressTracker from "@/components/MilestoneProgressTracker";
 import TransactionConfirmationModal from "@/components/TransactionConfirmationModal";
+import DepositRateInfo from "@/components/DepositRateInfo";
 import ProposeRevisionModal, {
   type ProposeRevisionMilestoneInput,
 } from "@/components/ProposeRevisionModal";
@@ -36,9 +41,10 @@ import { parseJobIdFromResult } from "@/utils/stellar";
 import ShareMenu from "@/components/ShareMenu";
 import { useToast } from "@/components/Toast";
 import WalletAddress from "@/components/WalletAddress";
+import ApproveMilestoneModal from "@/components/ApproveMilestoneModal";
 
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 function stroopsToXlm(stroops: string): number {
   try {
@@ -67,6 +73,11 @@ type PendingOnChainAction = {
   milestoneId?: string;
   newDeadline?: string;
   onChainJobId?: number | string;
+  /** Exchange-rate parity context for the FUND_JOB confirmation. */
+  rateInfo?: {
+    agreedValueStroops: string;
+    maxSlippageBps: number;
+  };
 };
 
 export default function JobDetailClient() {
@@ -74,10 +85,119 @@ export default function JobDetailClient() {
   const { address, balances, signAndBroadcastTransaction } = useWallet();
   const { user } = useAuth();
   const { toast } = useToast();
-  const [job, setJob] = useState<Job | null>(null);
-  const [reviews, setReviews] = useState<Review[]>([]);
-  const [reviewsLoading, setReviewsLoading] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+
+  const {
+    data: job = null,
+    isLoading: isJobLoading,
+    isFetching: isJobFetching,
+    error: jobError
+  } = useQuery<Job | null>({
+    queryKey: ["job", id],
+    queryFn: async () => {
+      const token = localStorage.getItem("token");
+      const res = await axios.get(`${API_URL}/jobs/${id}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      return res.data;
+    },
+    staleTime: 60_000,
+  });
+
+  const {
+    data: reviews = [],
+    isLoading: reviewsLoading
+  } = useQuery<Review[]>({
+    queryKey: ["reviews", id],
+    queryFn: async () => {
+      const token = localStorage.getItem("token");
+      const res = await axios.get<PaginatedResponse<Review>>(`${API_URL}/reviews`, {
+        params: { jobId: id, page: 1, limit: 50 },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      return res.data.data ?? [];
+    },
+    staleTime: 60_000,
+  });
+
+  const {
+    data: myAppInfo
+  } = useQuery<{ applied: boolean; appId: string | null }>({
+    queryKey: ["application", id, user?.id],
+    queryFn: async () => {
+      const token = localStorage.getItem("token");
+      if (!token || !user) return { applied: false, appId: null };
+      try {
+        const res = await axios.get<PaginatedResponse<Application>>(`${API_URL}/applications`, {
+          params: { jobId: id, freelancerId: user.id, limit: 1 },
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const applied = res.data.total > 0;
+        return {
+          applied,
+          appId: applied && res.data.data[0] ? res.data.data[0].id : null
+        };
+      } catch {
+        return { applied: false, appId: null };
+      }
+    },
+    enabled: !!user && user.role === "FREELANCER",
+    staleTime: 60_000,
+  });
+
+  const hasApplied = myAppInfo?.applied ?? false;
+  const myApplicationId = myAppInfo?.appId ?? null;
+
+  const PAGE_SIZE = 20;
+
+  const {
+    data: appsPages,
+    isLoading: loadingApps,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ["applications", id],
+    queryFn: async ({ pageParam = 1 }: { pageParam: number }) => {
+      const token = localStorage.getItem("token");
+      const res = await axios.get<{ data: Application[]; total: number; page: number; totalPages: number }>(
+        `${API_URL}/jobs/${id}/applications`,
+        {
+          params: { page: pageParam, limit: PAGE_SIZE },
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
+      );
+      return res.data;
+    },
+    getNextPageParam: (lastPage) =>
+      lastPage.page < lastPage.totalPages ? lastPage.page + 1 : undefined,
+    initialPageParam: 1,
+    enabled: !!job && !!user && user.id === job.client.id,
+    staleTime: 60_000,
+  });
+
+  const applications = appsPages?.pages.flatMap((p) => p.data) ?? [];
+  const totalApplications = appsPages?.pages[0]?.total ?? 0;
+
+  const loading = isJobLoading;
+
+  const setJob = useCallback((updater: Job | null | ((prev: Job | null) => Job | null)) => {
+    queryClient.setQueryData<Job | null>(["job", id], (old) => {
+      if (typeof updater === 'function') {
+        return updater(old ?? null);
+      }
+      return updater;
+    });
+  }, [queryClient, id]);
+
+  const setHasApplied = (val: boolean) => {
+    queryClient.setQueryData<{ applied: boolean; appId: string | null } | undefined>(["application", id, user?.id], (old) => old ? { ...old, applied: val } : undefined);
+  };
+
+  const setMyApplicationId = (val: string | null) => {
+    queryClient.setQueryData<{ applied: boolean; appId: string | null } | undefined>(["application", id, user?.id], (old) => old ? { ...old, appId: val } : undefined);
+  };
+
   const [processing, setProcessing] = useState(false);
   const [actioningMilestoneId, setActioningMilestoneId] = useState<
     string | null
@@ -86,15 +206,18 @@ export default function JobDetailClient() {
     string | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (jobError) {
+      setError(jobError instanceof Error ? jobError.message : "Failed to fetch job details.");
+    }
+  }, [jobError]);
+
   const [applyModalOpen, setApplyModalOpen] = useState(false);
   const [disputeModalOpen, setDisputeModalOpen] = useState(false);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [hasApplied, setHasApplied] = useState(false);
-  const [myApplicationId, setMyApplicationId] = useState<string | null>(null);
   const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
-  const [applications, setApplications] = useState<Application[]>([]);
-  const [loadingApps, setLoadingApps] = useState(false);
   const [actioningApp, setActioningApp] = useState<string | null>(null);
   const [proposeRevisionOpen, setProposeRevisionOpen] = useState(false);
   const [recentlyApprovedMilestoneId, setRecentlyApprovedMilestoneId] = useState<
@@ -103,89 +226,19 @@ export default function JobDetailClient() {
   const [extendDeadlineDate, setExtendDeadlineDate] = useState<Record<string, string>>({});
   const [pendingOnChainAction, setPendingOnChainAction] = useState<PendingOnChainAction | null>(null);
   const [selectedPaymentToken, setSelectedPaymentToken] = useState<(typeof PAYMENT_TOKENS)[number]>("XLM");
+  const [approveMilestoneModalId, setApproveMilestoneModalId] = useState<string | null>(null);
 
   const isClient = Boolean(job && address === job.client.walletAddress);
 
   const fetchJob = useCallback(async () => {
-    try {
-      const token = localStorage.getItem("token");
-      setHasApplied(false);
-
-      const res = await axios.get(`${API_URL}/jobs/${id}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      setJob(res.data);
-
-      setReviewsLoading(true);
-      try {
-        const reviewsRes = await axios.get<PaginatedResponse<Review>>(
-          `${API_URL}/reviews`,
-          {
-            params: { jobId: id, page: 1, limit: 50 },
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          },
-        );
-        setReviews(reviewsRes.data.data ?? []);
-      } catch {
-        setReviews([]);
-      } finally {
-        setReviewsLoading(false);
-      }
-
-      if (token && user?.role === "FREELANCER") {
-        try {
-          const appsRes = await axios.get<PaginatedResponse<Application>>(
-            `${API_URL}/applications`,
-            {
-              params: { jobId: id, freelancerId: user.id, limit: 1 },
-              headers: { Authorization: `Bearer ${token}` },
-            },
-          );
-          const applied = appsRes.data.total > 0;
-          setHasApplied(applied);
-          if (applied && appsRes.data.data[0]) {
-            setMyApplicationId(appsRes.data.data[0].id);
-          }
-        } catch {
-          setHasApplied(false);
-          setMyApplicationId(null);
-        }
-      }
-    } catch (err: unknown) {
-      setError(
-        err instanceof Error ? err.message : "Failed to fetch job details.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [id, user]);
-
-  useEffect(() => {
-    fetchJob();
-  }, [fetchJob]);
+    await queryClient.invalidateQueries({ queryKey: ["job", id] });
+    await queryClient.invalidateQueries({ queryKey: ["reviews", id] });
+    await queryClient.invalidateQueries({ queryKey: ["application", id, user?.id] });
+  }, [queryClient, id, user?.id]);
 
   const fetchApplications = useCallback(async () => {
-    setLoadingApps(true);
-    try {
-      const token = localStorage.getItem("token");
-      const res = await axios.get<{ data: Application[] }>(
-        `${API_URL}/jobs/${id as string}/applications`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-      );
-      setApplications(res.data.data ?? []);
-    } catch {
-      setApplications([]);
-    } finally {
-      setLoadingApps(false);
-    }
-  }, [id]);
-
-  // Fetch applicants once job loads and current user is the owner
-  useEffect(() => {
-    if (job && user && user.id === job.client.id) {
-      void fetchApplications();
-    }
-  }, [job, user, fetchApplications]);
+    await queryClient.invalidateQueries({ queryKey: ["applications", id] });
+  }, [queryClient, id]);
 
   const handleApplicationStatus = async (
     appId: string,
@@ -326,6 +379,21 @@ export default function JobDetailClient() {
         setRecentlyApprovedMilestoneId(action.milestoneId);
       }
 
+      if (
+        action.confirmType === "SUBMIT_MILESTONE" &&
+        action.milestoneId &&
+        job
+      ) {
+        const milestoneIndex = job.milestones.findIndex(
+          (milestone) => milestone.id === action.milestoneId,
+        );
+        if (milestoneIndex !== -1) {
+          window.localStorage.removeItem(
+            getMilestoneDraftKey(job.id, milestoneIndex),
+          );
+        }
+      }
+
       if (action.confirmType === "PROPOSE_REVISION") {
         setProposeRevisionOpen(false);
       }
@@ -427,9 +495,29 @@ export default function JobDetailClient() {
           action === "extend-deadline" && milestoneId
             ? extendDeadlineDate[milestoneId]
             : undefined,
+        rateInfo:
+          action === "fund" && res.data.agreedValueStroops
+            ? {
+                agreedValueStroops: String(res.data.agreedValueStroops),
+                maxSlippageBps: Number(res.data.maxSlippageBps ?? 0),
+              }
+            : undefined,
       });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Action failed.");
+      // Surface the contract's exchange-rate parity failures with their detail.
+      if (axios.isAxiosError(err) && err.response?.data?.error === "InsufficientValue") {
+        setError(
+          err.response.data.message ??
+            "The deposit is worth less than the agreed job value at the current exchange rate.",
+        );
+      } else if (axios.isAxiosError(err) && err.response?.data?.error === "OracleUnavailable") {
+        setError(
+          err.response.data.message ??
+            "The exchange-rate oracle is currently unavailable. Try again shortly.",
+        );
+      } else {
+        setError(err instanceof Error ? err.message : "Action failed.");
+      }
     }
   };
 
@@ -716,7 +804,38 @@ export default function JobDetailClient() {
         onConfirm={async (preparedXdr) => {
           await confirmPendingOnChainAction(preparedXdr);
         }}
+        extraContent={
+          pendingOnChainAction?.rateInfo ? (
+            <DepositRateInfo
+              agreedValueStroops={pendingOnChainAction.rateInfo.agreedValueStroops}
+              maxSlippageBps={pendingOnChainAction.rateInfo.maxSlippageBps}
+            />
+          ) : undefined
+        }
       />
+
+      {(() => {
+        const pendingMilestone = approveMilestoneModalId
+          ? job.milestones.find((m) => m.id === approveMilestoneModalId)
+          : null;
+        return (
+          <ApproveMilestoneModal
+            isOpen={Boolean(pendingMilestone)}
+            milestoneTitle={pendingMilestone?.title ?? ""}
+            milestoneAmount={pendingMilestone?.amount ?? 0}
+            freelancerName={job.freelancer?.username ?? job.freelancer?.walletAddress ?? "Freelancer"}
+            milestoneDescription={pendingMilestone?.description ?? ""}
+            isLoading={Boolean(approveMilestoneModalId && actioningMilestoneId === approveMilestoneModalId)}
+            onClose={() => setApproveMilestoneModalId(null)}
+            onConfirm={() => {
+              if (approveMilestoneModalId) {
+                setApproveMilestoneModalId(null);
+                void handleApproveMilestone(approveMilestoneModalId);
+              }
+            }}
+          />
+        );
+      })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Content */}
@@ -731,8 +850,11 @@ export default function JobDetailClient() {
             </div>
           </div>
 
-          <h1 className="text-3xl font-bold text-theme-heading mb-4">
+          <h1 className="text-3xl font-bold text-theme-heading mb-4 flex items-center gap-3">
             {job.title}
+            {isJobFetching && (
+              <Loader2 className="animate-spin text-theme-text/50" size={20} aria-label="Refreshing data" />
+            )}
           </h1>
 
           <div className="flex flex-wrap items-center gap-4 mb-8">
@@ -866,7 +988,7 @@ export default function JobDetailClient() {
               actioningMilestoneId={actioningMilestoneId}
               recentlyApprovedMilestoneId={recentlyApprovedMilestoneId}
               onSubmitMilestone={(milestoneId) => void handleSubmitMilestone(milestoneId)}
-              onApproveMilestone={(milestoneId) => void handleApproveMilestone(milestoneId)}
+              onApproveMilestone={(milestoneId) => setApproveMilestoneModalId(milestoneId)}
               onRequestRevision={(milestoneId) =>
                 void handleUpdateMilestoneStatus(milestoneId, "REJECTED")
               }
@@ -972,9 +1094,16 @@ export default function JobDetailClient() {
           {/* Applicants — visible to owning client only */}
           {isOwnJob && (
             <div className="card mt-8">
-              <h2 className="text-lg font-semibold text-theme-heading mb-4">
-                Applicants
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-theme-heading">
+                  Applicants
+                </h2>
+                {!loadingApps && totalApplications > 0 && (
+                  <span className="text-sm text-theme-text" data-testid="applicants-count">
+                    Showing {applications.length} of {totalApplications} applications
+                  </span>
+                )}
+              </div>
               {loadingApps ? (
                 <div className="flex justify-center py-8">
                   <Loader2
@@ -987,63 +1116,82 @@ export default function JobDetailClient() {
                   No applications yet.
                 </p>
               ) : (
-                <div className="space-y-4">
-                  {applications.map((app) => (
-                    <div
-                      key={app.id}
-                      className="flex items-center justify-between p-4 bg-theme-bg rounded-lg border border-theme-border"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-stellar-blue to-stellar-purple flex items-center justify-center text-white text-sm font-bold">
-                          {app.freelancer.username.charAt(0).toUpperCase()}
+                <>
+                  <div className="space-y-4">
+                    {applications.map((app) => (
+                      <div
+                        key={app.id}
+                        className="flex items-center justify-between p-4 bg-theme-bg rounded-lg border border-theme-border"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-stellar-blue to-stellar-purple flex items-center justify-center text-white text-sm font-bold">
+                            {app.freelancer.username.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-medium text-theme-heading text-sm">
+                              {app.freelancer.username}
+                            </p>
+                            <p className="text-xs text-theme-text">
+                              Bid: {app.bidAmount.toLocaleString()} XLM
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium text-theme-heading text-sm">
-                            {app.freelancer.username}
-                          </p>
-                          <p className="text-xs text-theme-text">
-                            Bid: {app.bidAmount.toLocaleString()} XLM
-                          </p>
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={app.status} />
+                          {app.status === "PENDING" && (
+                            <>
+                              <button
+                                disabled={actioningApp === app.id}
+                                onClick={() =>
+                                  void handleApplicationStatus(app.id, "ACCEPTED")
+                                }
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-success/10 text-theme-success hover:bg-theme-success/20 transition-colors disabled:opacity-50"
+                              >
+                                {actioningApp === app.id ? (
+                                  <Loader2 size={12} className="animate-spin" />
+                                ) : (
+                                  <UserCheck size={12} />
+                                )}
+                                Accept
+                              </button>
+                              <button
+                                disabled={actioningApp === app.id}
+                                onClick={() =>
+                                  void handleApplicationStatus(app.id, "REJECTED")
+                                }
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-error/10 text-theme-error hover:bg-theme-error/20 transition-colors disabled:opacity-50"
+                              >
+                                {actioningApp === app.id ? (
+                                  <Loader2 size={12} className="animate-spin" />
+                                ) : (
+                                  <XCircle size={12} />
+                                )}
+                                Reject
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <StatusBadge status={app.status} />
-                        {app.status === "PENDING" && (
-                          <>
-                            <button
-                              disabled={actioningApp === app.id}
-                              onClick={() =>
-                                void handleApplicationStatus(app.id, "ACCEPTED")
-                              }
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-success/10 text-theme-success hover:bg-theme-success/20 transition-colors disabled:opacity-50"
-                            >
-                              {actioningApp === app.id ? (
-                                <Loader2 size={12} className="animate-spin" />
-                              ) : (
-                                <UserCheck size={12} />
-                              )}
-                              Accept
-                            </button>
-                            <button
-                              disabled={actioningApp === app.id}
-                              onClick={() =>
-                                void handleApplicationStatus(app.id, "REJECTED")
-                              }
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-error/10 text-theme-error hover:bg-theme-error/20 transition-colors disabled:opacity-50"
-                            >
-                              {actioningApp === app.id ? (
-                                <Loader2 size={12} className="animate-spin" />
-                              ) : (
-                                <XCircle size={12} />
-                              )}
-                              Reject
-                            </button>
-                          </>
+                    ))}
+                  </div>
+                  {hasNextPage && (
+                    <div className="mt-4 flex justify-center">
+                      <button
+                        data-testid="load-more-applications"
+                        onClick={() => void fetchNextPage()}
+                        disabled={isFetchingNextPage}
+                        className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm disabled:opacity-50"
+                      >
+                        {isFetchingNextPage ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <ChevronDown size={14} />
                         )}
-                      </div>
+                        Load more
+                      </button>
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1420,6 +1568,21 @@ export default function JobDetailClient() {
           </div>
         </div>
       )}
+
+      {/* Sticky Apply bar — mobile only, freelancers, open jobs not yet applied */}
+      {user?.role === "FREELANCER" &&
+        !isOwnJob &&
+        job.status === "OPEN" &&
+        !hasApplied && (
+          <div className="sm:hidden fixed bottom-0 inset-x-0 z-40 border-t border-theme-border bg-theme-card/95 px-4 py-3 backdrop-blur-sm">
+            <button
+              className="btn-primary w-full"
+              onClick={() => setApplyModalOpen(true)}
+            >
+              Apply for this Job
+            </button>
+          </div>
+        )}
     </div>
   );
 }

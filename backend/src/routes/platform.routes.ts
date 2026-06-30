@@ -62,4 +62,28 @@ router.get(
   }),
 );
 
+/**
+ * GET /api/platform/config
+ *
+ * Public badge tier configuration used by the frontend to display
+ * reputation badges. Cached for 1 hour (3600 s).
+ */
+router.get(
+  "/config",
+  asyncHandler(async (_req: Request, res: Response) => {
+    const cacheKey = "platform:config";
+
+    const { data } = await cache(cacheKey, 3600, async () => ({
+      badgeTiers: [
+        { name: "Bronze", minScore: 100, colour: "#CD7F32" },
+        { name: "Silver", minScore: 300, colour: "#C0C0C0" },
+        { name: "Gold", minScore: 500, colour: "#FFD700" },
+        { name: "Platinum", minScore: 700, colour: "#E5E4E2" },
+      ],
+    }));
+
+    res.json(data);
+  }),
+);
+
 export default router;

@@ -3,6 +3,11 @@ import { getIo } from "../socket";
 import { EmailService } from "./email.service";
 import { config } from "../config";
 import { logger } from "../lib/logger";
+import webpush from "web-push";
+import {
+  notificationQueue,
+  getNotificationPriority,
+} from "../lib/notification-queue";
 
 const prisma = new PrismaClient();
 
@@ -82,7 +87,8 @@ export class NotificationService {
   }
 
   /**
-   * Sends a notification immediately without batching
+   * Persists the notification to the DB and enqueues it for priority-ordered socket delivery.
+   * Callers get back the saved record immediately; socket emit happens asynchronously via the worker.
    */
   private static async sendImmediateNotification(params: {
     userId: string;
@@ -93,7 +99,6 @@ export class NotificationService {
   }) {
     const { userId, type, title, message, metadata } = params;
 
-    // 1. Create DB record (ensure commit before emitting)
     const notification = await prisma.$transaction(async (tx) => {
       return await tx.notification.create({
         data: {
@@ -106,32 +111,22 @@ export class NotificationService {
       });
     });
 
-    return this.deliverPersistedNotification(notification);
-  }
-
-  /**
-   * Delivers a notification that was already committed by another transaction.
-   */
-  static deliverPersistedNotification(notification: Notification) {
-    void this.maybeSendEmailForNotification({
-      userId: notification.userId,
-      type: notification.type,
-      title: notification.title,
-      message: notification.message,
-      metadata: notification.metadata || {},
-    });
-
-    const io = getIo();
-    io.to(`user:${notification.userId}`).emit("notification:new", notification);
-
-    logger.info(
+    const priority = getNotificationPriority(type);
+    await notificationQueue.add(
+      "send",
       {
-        userId: notification.userId,
-        type: notification.type,
-        title: notification.title,
+        userId,
+        type,
+        title,
+        message,
+        metadata: metadata || {},
+        notificationId: notification.id,
+        priority,
       },
-      "Notification sent",
+      { priority },
     );
+
+    logger.info({ userId, type, title, notificationId: notification.id }, "Notification enqueued");
     return notification;
   }
 
@@ -293,7 +288,7 @@ export class NotificationService {
     this.batches.clear();
   }
 
-  private static async maybeSendEmailForNotification(params: {
+  static async deliverExternalNotification(params: {
     userId: string;
     type: NotificationType;
     title: string;
@@ -360,21 +355,15 @@ export class NotificationService {
 
     if (!event) return;
 
-    try {
-      await EmailService.sendEventEmail({
-        to: email,
-        event,
-        title,
-        message,
-        outcome: metadata?.outcome,
-        actionUrl,
-      });
-    } catch (error) {
-      logger.error(
-        { err: error, userId, type },
-        "Failed to send notification email",
-      );
-    }
+    // Do not catch the error, let it propagate so the worker fails and retries
+    await EmailService.sendEventEmail({
+      to: email,
+      event,
+      title,
+      message,
+      outcome: metadata?.outcome,
+      actionUrl,
+    });
   }
 
   /**
@@ -477,4 +466,186 @@ export class NotificationService {
   static async deleteAllRead(userId: string) {
     return prisma.notification.deleteMany({ where: { userId, read: true } });
   }
+
+  /**
+   * Subscribe a user to push notifications
+   */
+  static async subscribeToPush(
+    userId: string,
+    subscription: {
+      endpoint: string;
+      p256dh: string;
+      auth: string;
+    },
+  ) {
+    try {
+      // Check if subscription already exists
+      const existing = await prisma.pushSubscription.findUnique({
+        where: { endpoint: subscription.endpoint },
+      });
+
+      if (existing) {
+        // Update if it belongs to a different user
+        if (existing.userId !== userId) {
+          await prisma.pushSubscription.update({
+            where: { endpoint: subscription.endpoint },
+            data: {
+              userId,
+              p256dh: subscription.p256dh,
+              auth: subscription.auth,
+            },
+          });
+        }
+      } else {
+        // Create new subscription
+        await prisma.pushSubscription.create({
+          data: {
+            userId,
+            endpoint: subscription.endpoint,
+            p256dh: subscription.p256dh,
+            auth: subscription.auth,
+          },
+        });
+      }
+
+      logger.info({ userId }, "User subscribed to push notifications");
+    } catch (error) {
+      logger.error({ err: error, userId }, "Error subscribing to push notifications");
+      throw error;
+    }
+  }
+
+  /**
+   * Unsubscribe a user from push notifications
+   */
+  static async unsubscribeFromPush(userId: string, endpoint: string) {
+    try {
+      await prisma.pushSubscription.deleteMany({
+        where: {
+          userId,
+          endpoint,
+        },
+      });
+
+      logger.info({ userId, endpoint }, "User unsubscribed from push notifications");
+    } catch (error) {
+      logger.error({ err: error, userId }, "Error unsubscribing from push notifications");
+      throw error;
+    }
+  }
+
+  /**
+   * Send push notification to a user
+   */
+  private static async sendPushNotification(
+    userId: string,
+    payload: {
+      title: string;
+      body: string;
+      icon?: string;
+      badge?: string;
+      data?: any;
+    },
+  ) {
+    try {
+      // Configure web-push with VAPID details
+      const vapidPublicKey = config.vapidPublicKey;
+      const vapidPrivateKey = config.vapidPrivateKey;
+      const vapidSubject = config.vapidSubject || `mailto:admin@stellarmarket.io`;
+
+      if (!vapidPublicKey || !vapidPrivateKey) {
+        logger.warn("VAPID keys not configured, skipping push notification");
+        return;
+      }
+
+      webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+
+      // Get all push subscriptions for the user
+      const subscriptions = await prisma.pushSubscription.findMany({
+        where: { userId },
+      });
+
+      if (subscriptions.length === 0) {
+        return;
+      }
+
+      // Send to all subscriptions
+      const results = await Promise.allSettled(
+        subscriptions.map(async (sub) => {
+          try {
+            await webpush.sendNotification(
+              {
+                endpoint: sub.endpoint,
+                keys: {
+                  p256dh: sub.p256dh,
+                  auth: sub.auth,
+                },
+              },
+              JSON.stringify(payload),
+            );
+          } catch (error: any) {
+            // Remove invalid subscriptions
+            if (error.statusCode === 410 || error.statusCode === 404) {
+              await prisma.pushSubscription.delete({
+                where: { id: sub.id },
+              });
+              logger.info({ subscriptionId: sub.id }, "Removed invalid push subscription");
+            } else {
+              throw error;
+            }
+          }
+        }),
+      );
+
+      const successCount = results.filter((r) => r.status === "fulfilled").length;
+      logger.info(
+        { userId, successCount, totalSubscriptions: subscriptions.length },
+        "Push notifications sent",
+      );
+    } catch (error) {
+      logger.error({ err: error, userId }, "Error sending push notification");
+    }
+  }
+
+  /**
+   * Enhanced sendImmediateNotification to include push notifications
+   */
+  private static async sendImmediateNotificationWithPush(params: {
+    userId: string;
+    type: NotificationType;
+    title: string;
+    message: string;
+    metadata?: any;
+  }) {
+    const notification = await this.sendImmediateNotification(params);
+
+    // Send push notification for specific types
+    const pushEnabledTypes: NotificationType[] = [
+      "JOB_APPLIED",
+      "APPLICATION_ACCEPTED",
+      "APPLICATION_REJECTED",
+      "MILESTONE_SUBMITTED",
+      "MILESTONE_APPROVED",
+      "DISPUTE_RAISED",
+      "DISPUTE_RESOLVED",
+      "NEW_MESSAGE",
+    ];
+
+    if (pushEnabledTypes.includes(params.type)) {
+      await this.sendPushNotification(params.userId, {
+        title: params.title,
+        body: params.message,
+        icon: "/icon-192.png",
+        badge: "/favicon.svg",
+        data: {
+          notificationId: notification?.id,
+          type: params.type,
+          metadata: params.metadata,
+        },
+      });
+    }
+
+    return notification;
+  }
 }
+

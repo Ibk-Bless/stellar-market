@@ -48,7 +48,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
+      <div
+        className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2"
+        aria-live="polite"
+        aria-atomic="false"
+      >
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onClose={() => removeToast(t.id)} />
         ))}
@@ -63,6 +67,8 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
     return () => clearTimeout(timer);
   }, [onClose]);
 
+  const isError = toast.type === "error";
+
   return (
     <div
       className={`flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg min-w-[300px] max-w-[420px] animate-slide-in ${
@@ -70,12 +76,14 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
           ? "bg-theme-success/10 border-theme-success/20 text-theme-success"
           : "bg-theme-error/10 border-theme-error/20 text-theme-error"
       }`}
-      role="alert"
+      role={isError ? "alert" : "status"}
+      aria-live={isError ? "assertive" : "polite"}
+      aria-atomic="true"
     >
       {toast.type === "success" ? (
-        <CheckCircle size={18} className="shrink-0" />
+        <CheckCircle size={18} className="shrink-0" aria-hidden="true" />
       ) : (
-        <XCircle size={18} className="shrink-0" />
+        <XCircle size={18} className="shrink-0" aria-hidden="true" />
       )}
       <span className="text-sm flex-1">{toast.message}</span>
       <button
