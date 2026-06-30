@@ -5,7 +5,7 @@ import { X, Mail, AlertCircle } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import axios from "axios";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 export default function EmailVerificationBanner() {
   const { user, token } = useAuth();

@@ -39,8 +39,13 @@ jest.mock("@stellar/stellar-sdk", () => {
   };
 });
 
+const FREIGHTER_WALLET_KEY = "stellar_wallet";
+const SESSION_KEY = "stellarmarket_wallet_session";
+const STORAGE_KEY = "stellarmarket_wallet_connected";
+const WALLET_TYPE_KEY = "stellarmarket_wallet_type";
+
 function TestConsumer() {
-  const { error, connect, isConnecting } = useWallet();
+  const { error, connect, isConnecting, address, isReconnecting } = useWallet();
   return (
     <div>
       <button data-testid="connect-btn" onClick={() => connect("freighter")}>
@@ -48,6 +53,8 @@ function TestConsumer() {
       </button>
       <div data-testid="error-state">{error || "NO_ERROR"}</div>
       <div data-testid="connecting-state">{isConnecting ? "connecting" : "idle"}</div>
+      <div data-testid="address-state">{address || "NO_ADDRESS"}</div>
+      <div data-testid="reconnecting-state">{isReconnecting ? "reconnecting" : "idle"}</div>
     </div>
   );
 }
@@ -114,5 +121,76 @@ describe("WalletContext Freighter Connection", () => {
     expect(screen.getByTestId("connecting-state")).toHaveTextContent("idle");
     expect(screen.getByTestId("error-state")).toHaveTextContent("NOT_INSTALLED");
     expect(screen.getByText("Extension not found")).toBeInTheDocument();
+  });
+});
+
+describe("WalletContext session restoration", () => {
+  const STORED_ADDRESS = "GABC123STORED";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    delete (window as any).freighter;
+    localStorage.clear();
+  });
+
+  function seedStorage(address: string) {
+    localStorage.setItem(STORAGE_KEY, "true");
+    localStorage.setItem(WALLET_TYPE_KEY, "freighter");
+    localStorage.setItem(FREIGHTER_WALLET_KEY, JSON.stringify({ walletAddress: address, connectedAt: Date.now() }));
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ address, connectedAt: Date.now(), lastActivityAt: Date.now() }));
+  }
+
+  it("restores wallet state silently when stored address matches Freighter", async () => {
+    (window as any).freighter = {};
+    seedStorage(STORED_ADDRESS);
+    mockIsConnected.mockResolvedValue({ isConnected: true });
+    mockGetAddress.mockResolvedValue({ address: STORED_ADDRESS });
+
+    await act(async () => {
+      render(
+        <WalletProvider>
+          <TestConsumer />
+        </WalletProvider>
+      );
+    });
+
+    expect(screen.getByTestId("address-state")).toHaveTextContent(STORED_ADDRESS);
+    expect(screen.getByTestId("reconnecting-state")).toHaveTextContent("idle");
+  });
+
+  it("clears stored state when Freighter reports isConnected = false", async () => {
+    (window as any).freighter = {};
+    seedStorage(STORED_ADDRESS);
+    mockIsConnected.mockResolvedValue({ isConnected: false });
+
+    await act(async () => {
+      render(
+        <WalletProvider>
+          <TestConsumer />
+        </WalletProvider>
+      );
+    });
+
+    expect(screen.getByTestId("address-state")).toHaveTextContent("NO_ADDRESS");
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(FREIGHTER_WALLET_KEY)).toBeNull();
+  });
+
+  it("clears stored state when Freighter returns a different address (mismatch)", async () => {
+    (window as any).freighter = {};
+    seedStorage(STORED_ADDRESS);
+    mockIsConnected.mockResolvedValue({ isConnected: true });
+    mockGetAddress.mockResolvedValue({ address: "GDIFFERENT_ADDRESS" });
+
+    await act(async () => {
+      render(
+        <WalletProvider>
+          <TestConsumer />
+        </WalletProvider>
+      );
+    });
+
+    expect(screen.getByTestId("address-state")).toHaveTextContent("NO_ADDRESS");
+    expect(localStorage.getItem(FREIGHTER_WALLET_KEY)).toBeNull();
   });
 });

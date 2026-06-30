@@ -20,6 +20,7 @@ import {
   Bookmark,
   ChevronDown,
   Loader2,
+  RefreshCw,
   Gift,
   Monitor,
   Server,
@@ -33,6 +34,7 @@ import {
 import axios from "axios";
 import { useState, useRef, useEffect, type TouchEvent } from "react";
 import { useWallet, truncateAddress } from "@/context/WalletContext";
+import { useWalletBalance } from "@/hooks/useWalletBalance";
 import { useSocket } from "@/context/SocketContext";
 import { useAuth } from "@/context/AuthContext";
 import { usePathname, useRouter } from "next/navigation";
@@ -40,7 +42,7 @@ import { useToast } from "@/components/Toast";
 import ThemeToggleButton from "./ThemeToggleButton";
 import NotificationBell from "./NotificationBell";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 function UserMenu({ className }: { className?: string }) {
   const { address, disconnect, balance, balances, isLoadingBalance } = useWallet();
@@ -222,7 +224,13 @@ function UserMenu({ className }: { className?: string }) {
 
 /** Wallet balance display with dropdown for other assets */
 function WalletBalanceDisplay() {
-  const { address, balance, balances, isLoadingBalance, connect } = useWallet();
+  const { address, connect } = useWallet();
+  // Cached via TanStack Query (30s stale-time + refetch-on-focus) so the header
+  // balance is served from cache across renders/remounts instead of hitting
+  // Horizon every time, and refreshes in the background on window focus.
+  const { balances, isLoading, isRefreshing } = useWalletBalance(address);
+  const xlmBalance = balances.find((b) => b.asset === "XLM");
+  const balance = xlmBalance ? parseFloat(xlmBalance.balance).toFixed(2) : null;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -255,12 +263,20 @@ function WalletBalanceDisplay() {
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-theme-border hover:bg-theme-border/50 transition-colors text-sm"
         title={`Full balance: ${balance ?? "0.00"} XLM`}
       >
-        {isLoadingBalance ? (
+        {isLoading && balance === null ? (
           <Loader2 size={14} className="animate-spin" />
         ) : (
           <>
             <span className="font-medium text-theme-heading">{balance ?? "0.00"}</span>
             <span className="text-theme-text">XLM</span>
+            {isRefreshing && (
+              <RefreshCw
+                size={12}
+                className="animate-spin text-theme-text/60"
+                aria-label="Refreshing balance"
+                data-testid="balance-refreshing"
+              />
+            )}
             {balances.length > 1 && <ChevronDown size={14} className="text-theme-text" />}
           </>
         )}

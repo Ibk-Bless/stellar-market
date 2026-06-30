@@ -11,7 +11,7 @@ import { Job } from "@/types";
 
 const MDEditor = dynamic(() => import("@uiw/react-md-editor"), { ssr: false });
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 const TIMELINE_OPTIONS = [
   { label: "1 week", days: 7 },

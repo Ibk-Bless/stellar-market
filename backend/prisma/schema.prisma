@@ -92,6 +92,13 @@ enum NotificationType {
   NEW_MESSAGE
   BADGE_AWARDED
   ESCROW_TTL_WARNING
+  JOB_INVITATION
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
 }
 
 enum BadgeTier {
@@ -128,7 +135,12 @@ model User {
   isSuspended            Boolean   @default(false)
   suspendReason          String?
   suspendedAt            DateTime?
+  deletedAt              DateTime?
   isSuspiciousReporter   Boolean   @default(false)
+  // Incremented on every password change so previously-issued JWTs (which embed
+  // the value at sign time) are rejected by the auth middleware on mismatch.
+  // Invalidates stolen tokens immediately after a password change (issue #787).
+  tokenVersion           Int       @default(0)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
   availability           Boolean   @default(true)
@@ -140,6 +152,8 @@ model User {
   freelancerJobs     Job[]          @relation("FreelancerJobs")
   services           Service[]      @relation("FreelancerServices")
   applications       Application[]
+  invitationsReceived Invitation[]  @relation("InvitationsReceived")
+  invitationsSent     Invitation[]  @relation("InvitationsSent")
   sentMessages       Message[]      @relation("SentMessages")
   receivedMessages   Message[]      @relation("ReceivedMessages")
   reviewsGiven       Review[]       @relation("ReviewsGiven")
@@ -209,6 +223,7 @@ model Job {
   freelancer   User?         @relation("FreelancerJobs", fields: [freelancerId], references: [id])
   milestones   Milestone[]
   applications Application[]
+  invitations  Invitation[]
   messages     Message[]
   reviews      Review[]
   transactions Transaction[]
@@ -217,6 +232,8 @@ model Job {
   savedBy      SavedJob[]    @relation("SavedByFreelancers")
   deadlineExtensionRequests DeadlineExtensionRequest[] @relation("DeadlineExtensions")
   escrowEvents EscrowEvent[]
+
+  contractPaused  Boolean  @default(false)
 
   @@index([deletedAt])
 }
@@ -281,6 +298,23 @@ model Application {
   freelancer User @relation(fields: [freelancerId], references: [id])
 
   @@unique([jobId, freelancerId])
+}
+
+model Invitation {
+  id           String           @id @default(cuid())
+  jobId        String
+  freelancerId String
+  clientId     String
+  message      String?
+  status       InvitationStatus @default(PENDING)
+  createdAt    DateTime         @default(now())
+
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  freelancer User @relation("InvitationsReceived", fields: [freelancerId], references: [id], onDelete: Cascade)
+  client     User @relation("InvitationsSent", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, freelancerId])
+  @@index([freelancerId, createdAt(sort: Desc)])
 }
 
 model Message {
@@ -517,6 +551,28 @@ model SyncState {
   id                String   @id @default("default")
   lastIndexedLedger Int      @default(0)
   updatedAt         DateTime @updatedAt
+}
+
+model HorizonCursor {
+  id          Int       @id @default(1)
+  cursor      String
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+  lastEventAt DateTime? @map("last_event_at")
+
+  @@map("horizon_cursor")
+}
+
+model HorizonDlq {
+  id         Int       @id @default(autoincrement())
+  cursor     String
+  payload    Json
+  error      String
+  attempt    Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  replayedAt DateTime? @map("replayed_at")
+
+  @@index([replayedAt, cursor])
+  @@map("horizon_dlq")
 }
 
 model Badge {

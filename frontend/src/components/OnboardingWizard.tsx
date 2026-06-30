@@ -6,7 +6,7 @@ import axios from "axios";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 const TOTAL_STEPS = 4;
 
 interface StepProps {

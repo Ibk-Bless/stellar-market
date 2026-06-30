@@ -80,7 +80,8 @@ router.get(
 
 /**
  * GET /api/disputes
- * Get all disputes with optional filtering and pagination
+ * Get disputes scoped to the requesting user's role.
+ * Freelancers see their own disputes; clients see theirs; admins see all.
  */
 router.get(
   "/",
@@ -88,9 +89,24 @@ router.get(
   validate({ query: queryDisputesSchema }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const query = req.query as unknown as { page: number; limit: number };
+    const userId = req.userId!;
+    const role = req.userRole;
+
+    let userFilter: Record<string, unknown> | undefined;
+
+    if (role === UserRole.FREELANCER) {
+      userFilter = { freelancerId: userId };
+    } else if (role === UserRole.CLIENT) {
+      userFilter = { clientId: userId };
+    } else if (role === UserRole.ADMIN) {
+      userFilter = undefined;
+    } else {
+      res.status(403).json({ error: "Access denied." });
+      return;
+    }
 
     const result = await DisputeService.getDisputes(
-      { status: DisputeStatus.OPEN },
+      { status: DisputeStatus.OPEN, userFilter },
       { page: query.page, limit: query.limit },
     );
 
@@ -124,8 +140,10 @@ router.get(
   authenticate,
   validate({ params: disputeIdParamSchema }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
+    const isAdmin = req.userRole === UserRole.ADMIN;
     const dispute = (await DisputeService.getDisputeById(
       req.params.id as string,
+      isAdmin,
     )) as any;
 
     const userId = req.userId!;
@@ -134,12 +152,7 @@ router.get(
       dispute.freelancerId === userId ||
       dispute.initiatorId === userId;
 
-    const isRegisteredVoter = Array.isArray(dispute.votes)
-      ? dispute.votes.some((vote: any) => vote.voterId === userId)
-      : false;
-    const isAdmin = req.userRole === UserRole.ADMIN;
-
-    if (!isParticipant && !isRegisteredVoter && !isAdmin) {
+    if (!isParticipant && !isAdmin) {
       res.status(403).json({
         error:
           "Access denied. Only dispute participants or registered voters can view this dispute.",
@@ -148,6 +161,43 @@ router.get(
     }
 
     res.json(dispute);
+  }),
+);
+
+/**
+ * GET /api/disputes/:id/votes
+ * Get paginated votes for a dispute (audit trail)
+ */
+router.get(
+  "/:id/votes",
+  authenticate,
+  validate({ params: disputeIdParamSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const disputeId = req.params.id as string;
+    const cursor = req.query.cursor as string | undefined;
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+
+    const dispute = await DisputeService.getDisputeById(disputeId);
+    if (!dispute) {
+      res.status(404).json({ error: "Dispute not found." });
+      return;
+    }
+
+    const isAdmin = req.userRole === UserRole.ADMIN;
+    const isParticipant =
+      dispute.clientId === req.userId ||
+      dispute.freelancerId === req.userId ||
+      dispute.initiatorId === req.userId;
+
+    if (!isParticipant && !isAdmin) {
+      res.status(403).json({
+        error: "Access denied. Only dispute participants can view vote history.",
+      });
+      return;
+    }
+
+    const result = await DisputeService.getVotesByDisputeId(disputeId, cursor, limit);
+    res.json(result);
   }),
 );
 

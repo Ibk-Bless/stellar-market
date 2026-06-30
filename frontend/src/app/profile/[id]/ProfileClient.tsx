@@ -16,19 +16,22 @@ import {
   AlertCircle,
   FileText,
   Images,
+  UserPlus,
 } from "lucide-react";
 import axios from "axios";
-import { UserProfile, PortfolioItem } from "@/types";
+import { useQuery } from "@tanstack/react-query";
+import { UserProfile, PortfolioItem, BadgeTier, PlatformConfig } from "@/types";
 import Link from "next/link";
 import Image from "next/image";
 import Skeleton from "@/components/Skeleton";
 import { useAuth } from "@/context/AuthContext";
-import { ContractService, ReputationResult } from "@/services/ContractService";
+import { ContractService, ReputationResult, DEFAULT_BADGE_TIERS } from "@/services/ContractService";
 import ShareMenu from "@/components/ShareMenu";
 import ProfileSkeleton from "@/components/skeletons/ProfileSkeleton";
 import WalletAddress from "@/components/WalletAddress";
+import InviteToJobModal from "@/components/InviteToJobModal";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 // Base URL without /api for serving static files
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 
@@ -48,6 +51,7 @@ export default function ProfileClient() {
 
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
   const [lightboxItem, setLightboxItem] = useState<PortfolioItem | null>(null);
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -76,6 +80,16 @@ export default function ProfileClient() {
       .catch(() => setPortfolioItems([]));
   }, [id]);
 
+  const { data: badgeTiers } = useQuery<BadgeTier[]>({
+    queryKey: ["badgeTiers"],
+    queryFn: async () => {
+      const res = await axios.get<PlatformConfig>(`${API_URL}/platform/config`);
+      return res.data.badgeTiers;
+    },
+    staleTime: 3_600_000,
+    placeholderData: DEFAULT_BADGE_TIERS,
+  });
+
   useEffect(() => {
     const fetchReputation = async () => {
       if (!profile?.walletAddress) {
@@ -85,7 +99,7 @@ export default function ProfileClient() {
 
       try {
         setReputationLoading(true);
-        const result = await ContractService.getReputation(profile.walletAddress);
+        const result = await ContractService.getReputation(profile.walletAddress, badgeTiers);
         setReputation(result);
       } catch (err) {
         console.error("Fetch reputation error:", err);
@@ -96,9 +110,16 @@ export default function ProfileClient() {
     };
 
     fetchReputation();
-  }, [profile?.walletAddress]);
+  }, [profile?.walletAddress, badgeTiers]);
 
   const isOwnProfile = currentUser && profile && currentUser.id === profile.id;
+  // A client viewing another user's freelancer profile gets a hiring CTA.
+  const canInvite =
+    !!currentUser &&
+    !!profile &&
+    !isOwnProfile &&
+    currentUser.role === "CLIENT" &&
+    profile.role === "FREELANCER";
 
   if (loading) {
     return <ProfileSkeleton />;
@@ -207,6 +228,16 @@ export default function ProfileClient() {
                 <Edit size={16} />
                 Edit Profile
               </Link>
+            )}
+            {canInvite && (
+              <button
+                type="button"
+                onClick={() => setInviteModalOpen(true)}
+                className="ml-auto btn-primary flex items-center gap-2 text-sm"
+              >
+                <UserPlus size={16} />
+                Invite to Job
+              </button>
             )}
             <ShareMenu
               title={profile.username}
@@ -627,6 +658,15 @@ export default function ProfileClient() {
             </div>
           </div>
         </div>
+      )}
+
+      {canInvite && profile && (
+        <InviteToJobModal
+          freelancerId={profile.id}
+          freelancerName={profile.username}
+          isOpen={inviteModalOpen}
+          onClose={() => setInviteModalOpen(false)}
+        />
       )}
     </div>
   );

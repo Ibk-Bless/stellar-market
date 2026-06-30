@@ -14,6 +14,8 @@ export const ErrorCodes = {
   UNEXPECTED_FIELD: "UNEXPECTED_FIELD",
   EXTERNAL_SERVICE_UNAVAILABLE: "EXTERNAL_SERVICE_UNAVAILABLE",
   RATE_LIMITED: "RATE_LIMITED",
+  ACCOUNT_DELETED: "ACCOUNT_DELETED",
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

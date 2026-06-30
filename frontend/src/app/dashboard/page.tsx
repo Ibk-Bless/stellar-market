@@ -34,12 +34,13 @@ import StatusBadge from "@/components/StatusBadge";
 import OnboardingWizard from "@/components/OnboardingWizard";
 import { DashboardStatsSkeleton, DashboardTabContentSkeleton } from "@/components/skeletons/DashboardSkeleton";
 import DisputeCardSkeleton from "@/components/skeletons/DisputeCardSkeleton";
+import StatsRow from "@/components/StatsRow";
 import { useDelay } from "@/hooks/useDelay";
 import { useAuth } from "@/context/AuthContext";
 import { useSocket } from "@/context/SocketContext";
 import { Job, Application, PaginatedResponse } from "@/types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 interface DashboardStats {
   postedJobs: number;
@@ -342,7 +343,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats */}
-      {dataLoading && ready ? (
+      {!isClient ? (
+        <StatsRow />
+      ) : dataLoading && ready ? (
         <DashboardStatsSkeleton />
       ) : dataLoading ? null : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">

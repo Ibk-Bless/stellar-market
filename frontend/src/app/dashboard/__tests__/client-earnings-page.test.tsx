@@ -14,9 +14,13 @@ jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
-jest.mock("@/context/AuthContext", () => ({
-  useAuth: () => ({ user: { id: "client-1", role: "CLIENT" } }),
-}));
+// Return a stable user reference; a fresh object per call would change the
+// identity of the page's `useCallback`/`useEffect` deps and re-trigger the fetch
+// on every render, flipping the component back into its loading state.
+jest.mock("@/context/AuthContext", () => {
+  const user = { id: "client-1", role: "CLIENT" };
+  return { useAuth: () => ({ user }) };
+});
 
 // Recharts' ResponsiveContainer relies on layout measurements jsdom doesn't
 // provide; stub the pieces this page uses so the chart renders deterministically.

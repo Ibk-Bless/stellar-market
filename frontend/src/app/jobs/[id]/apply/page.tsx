@@ -9,7 +9,7 @@ import ApplyModal from "@/components/ApplyModal";
 import { useAuth } from "@/context/AuthContext";
 import { Job } from "@/types";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 export default function ApplyPage() {
   const params = useParams();

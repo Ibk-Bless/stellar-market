@@ -11,3 +11,4 @@ export * from "./recommendation";
 export * from "./service";
 export * from "./admin";
 export * from "./dispute";
+export * from "./invitation";

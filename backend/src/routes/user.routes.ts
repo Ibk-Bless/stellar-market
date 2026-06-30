@@ -16,6 +16,10 @@ import { validate } from "../middleware/validation";
 import { ReputationService } from "../services/reputation.service";
 import { normalizeSkills } from "../services/skill.service";
 import { logger } from "../lib/logger";
+import sharp from "sharp";
+import path from "path";
+import fs from "fs";
+import { AVATAR_UPLOAD_DIR } from "../config/upload";
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -60,6 +64,24 @@ router.get("/me", authenticate, async (req: AuthRequest, res: Response) => {
     res.status(500).json({ error: "Internal server error." });
   }
 });
+
+// DELETE /api/users/me — soft-delete current authenticated user's account
+router.delete("/me", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const userId = req.userId!;
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { deletedAt: new Date() },
+  });
+
+  // Revoke all refresh tokens so any stored sessions are invalidated
+  await prisma.refreshToken.updateMany({
+    where: { userId },
+    data: { revoked: true },
+  });
+
+  res.json({ message: "Account deleted." });
+}));
 
 // PUT /api/users/me — update current authenticated user's profile
 router.put(
@@ -150,17 +172,48 @@ router.post(
         res.status(400).json({ error: "No file uploaded. Use field name 'avatar'." });
         return;
       }
-      const avatarUrl = `/api/uploads/avatars/${req.file.filename}`;
-      const updated = await prisma.user.update({
-        where: { id: req.userId },
-        data: { avatarUrl },
-        select: {
-          id: true,
-          username: true,
-          avatarUrl: true,
-        },
-      });
-      res.json(updated);
+
+      const originalPath = req.file.path;
+      const ext = path.extname(req.file.filename);
+      const processedFilename = `avatar-${Date.now()}-processed${ext}`;
+      const processedPath = path.join(AVATAR_UPLOAD_DIR, processedFilename);
+
+      try {
+        await sharp(originalPath)
+          .resize(400, 400, {
+            fit: "cover",
+            position: "center",
+          })
+          .jpeg({ quality: 85 })
+          .withMetadata(false)
+          .toFile(processedPath);
+
+        if (fs.existsSync(originalPath)) {
+          fs.unlinkSync(originalPath);
+        }
+
+        const avatarUrl = `/api/uploads/avatars/${processedFilename}`;
+        const updated = await prisma.user.update({
+          where: { id: req.userId },
+          data: { avatarUrl },
+          select: {
+            id: true,
+            username: true,
+            avatarUrl: true,
+          },
+        });
+
+        res.json(updated);
+      } catch (processingError) {
+        if (fs.existsSync(originalPath)) {
+          fs.unlinkSync(originalPath);
+        }
+        if (fs.existsSync(processedPath)) {
+          fs.unlinkSync(processedPath);
+        }
+        logger.error({ err: processingError }, "Avatar processing error");
+        res.status(500).json({ error: "Failed to process avatar image." });
+      }
     } catch (error) {
       logger.error({ err: error }, "Avatar upload error");
       res.status(500).json({ error: "Internal server error." });

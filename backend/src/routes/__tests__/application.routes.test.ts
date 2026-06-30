@@ -17,6 +17,8 @@ jest.mock("@prisma/client", () => {
       findMany: jest.fn(),
       count: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
+      delete: jest.fn(),
     },
     user: {
       findUnique: jest.fn().mockResolvedValue({
@@ -207,6 +209,89 @@ describe("POST /api/jobs/:jobId/apply", () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Job is not accepting applications." });
+  });
+});
+
+// ─── DELETE /api/applications/:id ─────────────────────────────────────────────
+describe("DELETE /api/applications/:id", () => {
+  const APP_ID = "00000000-0000-4000-8000-000000000200";
+  const FREELANCER_ID = "00000000-0000-4000-8000-000000000300";
+
+  it("returns 401 with no auth token", async () => {
+    const res = await request(app).delete(`/api/applications/${APP_ID}`);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 404 when application does not exist", async () => {
+    applicationMock.findUnique.mockResolvedValueOnce(null);
+
+    const res = await request(app)
+      .delete(`/api/applications/${APP_ID}`)
+      .set(authHeader(FREELANCER_ID));
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Application not found." });
+  });
+
+  it("returns 403 when caller is not the applicant", async () => {
+    applicationMock.findUnique.mockResolvedValueOnce({
+      id: APP_ID,
+      freelancerId: FREELANCER_ID,
+      status: "PENDING",
+    });
+
+    const res = await request(app)
+      .delete(`/api/applications/${APP_ID}`)
+      .set(authHeader(CLIENT_A_ID)); // different user
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "Not authorized." });
+  });
+
+  it("freelancer can withdraw a pending application", async () => {
+    applicationMock.findUnique.mockResolvedValueOnce({
+      id: APP_ID,
+      freelancerId: FREELANCER_ID,
+      status: "PENDING",
+    });
+    applicationMock.delete.mockResolvedValueOnce({});
+
+    const res = await request(app)
+      .delete(`/api/applications/${APP_ID}`)
+      .set(authHeader(FREELANCER_ID));
+
+    expect(res.status).toBe(204);
+    expect(applicationMock.delete).toHaveBeenCalledWith({ where: { id: APP_ID } });
+  });
+
+  it("returns 409 when freelancer tries to withdraw an accepted application", async () => {
+    applicationMock.findUnique.mockResolvedValueOnce({
+      id: APP_ID,
+      freelancerId: FREELANCER_ID,
+      status: "ACCEPTED",
+    });
+
+    const res = await request(app)
+      .delete(`/api/applications/${APP_ID}`)
+      .set(authHeader(FREELANCER_ID));
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "Cannot withdraw an accepted or rejected application." });
+  });
+
+  it("returns 409 when freelancer tries to withdraw a rejected application", async () => {
+    applicationMock.findUnique.mockResolvedValueOnce({
+      id: APP_ID,
+      freelancerId: FREELANCER_ID,
+      status: "REJECTED",
+    });
+
+    const res = await request(app)
+      .delete(`/api/applications/${APP_ID}`)
+      .set(authHeader(FREELANCER_ID));
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "Cannot withdraw an accepted or rejected application." });
   });
 });
 

@@ -9,6 +9,7 @@ import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/components/Toast";
 import WalletAddress from "@/components/WalletAddress";
 import SkillCombobox from "@/components/SkillCombobox";
+import { resizeImage, createImagePreview } from "@/utils/image";
 import {
   User,
   Settings,
@@ -32,7 +33,7 @@ import {
 } from "lucide-react";
 import { PortfolioItem } from "@/types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
 
 const PORTFOLIO_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"];
@@ -324,7 +325,7 @@ export default function SettingsPage() {
     return Object.keys(newErrors).length === 0;
   }
 
-  function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -338,12 +339,20 @@ export default function SettingsPage() {
       return;
     }
 
-    setAvatarFile(file);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setAvatarPreview(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const resizedFile = await resizeImage(file, {
+        maxWidth: 400,
+        maxHeight: 400,
+        quality: 0.85,
+        mimeType: file.type === "image/png" ? "image/png" : "image/jpeg",
+      });
+
+      setAvatarFile(resizedFile);
+      const preview = await createImagePreview(resizedFile);
+      setAvatarPreview(preview);
+    } catch (error) {
+      toast.error("Failed to process image. Please try another file.");
+    }
   }
 
   async function handleAvatarUpload() {

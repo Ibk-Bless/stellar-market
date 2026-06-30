@@ -89,6 +89,7 @@ interface WalletState {
   isSessionActive: boolean;
   sessionExpiresIn: number | null;
   extendSession: () => void;
+  isReconnecting: boolean;
 }
 
 const WalletContext = createContext<WalletState | undefined>(undefined);
@@ -96,6 +97,7 @@ const WalletContext = createContext<WalletState | undefined>(undefined);
 const STORAGE_KEY = "stellarmarket_wallet_connected";
 const WALLET_TYPE_KEY = "stellarmarket_wallet_type";
 const SESSION_KEY = "stellarmarket_wallet_session";
+const FREIGHTER_WALLET_KEY = "stellar_wallet";
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_WARNING_MS = 5 * 60 * 1000;
 
@@ -128,7 +130,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const pendingDisconnectResolve = useRef<((value: string | null) => void) | null>(null);
   const switchingToProvider = useRef<WalletProviderType | null>(null);
 
-  const balanceRefreshInterval = useRef<NodeJS.Timeout | null>(null);
   const sessionTimeoutId = useRef<NodeJS.Timeout | null>(null);
   const sessionWarningId = useRef<NodeJS.Timeout | null>(null);
   const sessionCheckInterval = useRef<NodeJS.Timeout | null>(null);
@@ -168,6 +169,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [sessionExpiresIn, setSessionExpiresIn] = useState<number | null>(null);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   // Session management functions
   const getStoredSession = useCallback((): WalletSession | null => {
@@ -331,19 +333,55 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (sessionAge > SESSION_TIMEOUT_MS) {
       clearSession();
       localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(FREIGHTER_WALLET_KEY);
       return;
     }
 
     const installed = await checkFreighterInstalled();
-    if (!installed) return;
+    if (!installed) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(FREIGHTER_WALLET_KEY);
+      clearSession();
+      return;
+    }
 
+    setIsReconnecting(true);
     try {
+      const connectedResult = await freighterIsConnected();
+      if (connectedResult.error || !connectedResult.isConnected) {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(WALLET_TYPE_KEY);
+        localStorage.removeItem(FREIGHTER_WALLET_KEY);
+        clearSession();
+        return;
+      }
+
       const result = await getAddress();
       if (result.error) {
         localStorage.removeItem(STORAGE_KEY);
         localStorage.removeItem(WALLET_TYPE_KEY);
+        localStorage.removeItem(FREIGHTER_WALLET_KEY);
+        clearSession();
         return;
       }
+
+      const storedFreighterWallet = (() => {
+        try {
+          const raw = localStorage.getItem(FREIGHTER_WALLET_KEY);
+          return raw ? (JSON.parse(raw) as { walletAddress: string; connectedAt: number }) : null;
+        } catch {
+          return null;
+        }
+      })();
+
+      if (storedFreighterWallet && storedFreighterWallet.walletAddress !== result.address) {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(WALLET_TYPE_KEY);
+        localStorage.removeItem(FREIGHTER_WALLET_KEY);
+        clearSession();
+        return;
+      }
+
       setAddress(result.address);
       setWalletType("freighter");
       saveSession(result.address);
@@ -351,6 +389,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } catch {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(WALLET_TYPE_KEY);
+      localStorage.removeItem(FREIGHTER_WALLET_KEY);
+      clearSession();
+    } finally {
+      setIsReconnecting(false);
     }
   }, [checkFreighterInstalled, getWalletKit, getStoredSession, clearSession, saveSession, updateSessionActivity]);
 
@@ -358,20 +400,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     restoreSession();
   }, [restoreSession]);
 
-  // Fetch balance when address changes
+  // Fetch balance when the connected address changes. We intentionally avoid a
+  // fixed polling interval here (which fired even when the tab was idle and was
+  // the source of redundant Horizon calls); the header balance is kept fresh by
+  // the cached useWalletBalance hook (30s stale-time + refetch-on-focus), and
+  // other consumers refresh explicitly via refreshBalance after transactions.
   useEffect(() => {
     if (address) {
       refreshBalance();
-      balanceRefreshInterval.current = setInterval(refreshBalance, 30000);
     } else {
       setBalance(null);
       setBalances([]);
     }
-    return () => {
-      if (balanceRefreshInterval.current) {
-        clearInterval(balanceRefreshInterval.current);
-      }
-    };
   }, [address, refreshBalance]);
 
   // Listen for Freighter account changes
@@ -485,6 +525,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       setWalletType("freighter");
       localStorage.setItem(STORAGE_KEY, "true");
       localStorage.setItem(WALLET_TYPE_KEY, "freighter");
+      localStorage.setItem(FREIGHTER_WALLET_KEY, JSON.stringify({ walletAddress: addressResult, connectedAt: Date.now() }));
       saveSession(addressResult);
       updateSessionActivity();
       return addressResult;
@@ -633,6 +674,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setWalletType(null);
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(WALLET_TYPE_KEY);
+    localStorage.removeItem(FREIGHTER_WALLET_KEY);
     clearSession();
     window.dispatchEvent(new CustomEvent("stellarmarket:walletDisconnected"));
   }, [clearSession]);
@@ -677,7 +719,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (!address) {
       return { success: false, error: "No wallet connected. Connect a wallet first." };
     }
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
     try {
       // Step 1 — fetch a one-time challenge from the server
       const challengeRes = await fetch(`${API}/auth/wallet/challenge`, {
@@ -791,6 +833,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       walletType,
       isSessionActive,
       sessionExpiresIn,
+      isReconnecting,
       connect,
       disconnect,
       refreshBalance,
@@ -802,6 +845,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [
       address, isConnecting, isFreighterInstalled, isLobstrInstalled, error,
       balance, balances, isLoadingBalance, walletType, isSessionActive, sessionExpiresIn,
+      isReconnecting,
       connect, disconnect, refreshBalance, signMessage, bindWallet, signAndBroadcastTransaction,
       updateSessionActivity,
     ],
@@ -810,6 +854,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   return (
     <WalletContext.Provider value={value}>
       {children}
+
+      {/* Reconnecting wallet banner */}
+      {isReconnecting && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[130] flex items-center gap-2 rounded-lg border border-theme-border bg-theme-card px-4 py-2 text-sm text-theme-text shadow-lg">
+          <Loader2 size={14} className="animate-spin" />
+          Reconnecting wallet&hellip;
+        </div>
+      )}
 
       {/* Wallet selection modal */}
       {showWalletSelect && (

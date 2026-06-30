@@ -55,6 +55,10 @@ export const errorHandler = (
     code = ErrorCodes.TOKEN_EXPIRED;
     statusCode = 401;
     message = 'Token expired';
+  } else if ((err as any).type === 'entity.too.large') {
+    code = ErrorCodes.PAYLOAD_TOO_LARGE;
+    statusCode = 413;
+    message = 'Request body is too large. Maximum size is 1MB.';
   } else if (err.name === 'MulterError') {
     code = ErrorCodes.FILE_UPLOAD_FAILED;
     statusCode = 400;

@@ -17,7 +17,7 @@ import { DollarSign, Calendar, Loader2, AlertTriangle } from "lucide-react";
 import axios from "axios";
 import { useAuth } from "@/context/AuthContext";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 
 interface MonthlySpend {
   month: string;

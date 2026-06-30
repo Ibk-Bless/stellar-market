@@ -23,12 +23,14 @@ describe("formatLocalTimestamp in UTC+1 context", () => {
   const RealDateTimeFormat = Intl.DateTimeFormat;
 
   beforeEach(() => {
-    // Simulate a UTC+1 browser by forcing Europe/London (BST in June = UTC+1)
+    // Simulate a UTC+1, en-GB browser by forcing Europe/London (BST in June =
+    // UTC+1) and the en-GB locale. Pinning the locale keeps the formatted output
+    // deterministic regardless of the CI runner's default locale.
     jest
       .spyOn(global.Intl, "DateTimeFormat")
       .mockImplementation(
-        (locale?: string | string[], options?: Intl.DateTimeFormatOptions) =>
-          new RealDateTimeFormat(locale, {
+        (_locale?: string | string[], options?: Intl.DateTimeFormatOptions) =>
+          new RealDateTimeFormat("en-GB", {
             ...options,
             timeZone: "Europe/London",
           }),
@@ -52,11 +54,13 @@ describe("LocalTimestamp component", () => {
   const RealDateTimeFormat = Intl.DateTimeFormat;
 
   beforeEach(() => {
+    // Pin both timezone (UTC+1) and locale (en-GB) so the formatted output is
+    // deterministic regardless of the CI runner's default locale.
     jest
       .spyOn(global.Intl, "DateTimeFormat")
       .mockImplementation(
-        (locale?: string | string[], options?: Intl.DateTimeFormatOptions) =>
-          new RealDateTimeFormat(locale, {
+        (_locale?: string | string[], options?: Intl.DateTimeFormatOptions) =>
+          new RealDateTimeFormat("en-GB", {
             ...options,
             timeZone: "Europe/London",
           }),

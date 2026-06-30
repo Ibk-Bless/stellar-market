@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useInfiniteQuery } from "@tanstack/react-query";
 import {
   Clock,
   DollarSign,
@@ -16,6 +16,7 @@ import {
   XCircle,
   PencilLine,
   Star,
+  ChevronDown,
 } from "lucide-react";
 import Link from "next/link";
 import axios from "axios";
@@ -43,7 +44,7 @@ import WalletAddress from "@/components/WalletAddress";
 import ApproveMilestoneModal from "@/components/ApproveMilestoneModal";
 
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 
 function stroopsToXlm(stroops: string): number {
   try {
@@ -125,7 +126,7 @@ export default function JobDetailClient() {
     queryKey: ["application", id, user?.id],
     queryFn: async () => {
       const token = localStorage.getItem("token");
-      if (!token) return { applied: false, appId: null };
+      if (!token || !user) return { applied: false, appId: null };
       try {
         const res = await axios.get<PaginatedResponse<Application>>(`${API_URL}/applications`, {
           params: { jobId: id, freelancerId: user.id, limit: 1 },
@@ -147,22 +148,36 @@ export default function JobDetailClient() {
   const hasApplied = myAppInfo?.applied ?? false;
   const myApplicationId = myAppInfo?.appId ?? null;
 
+  const PAGE_SIZE = 20;
+
   const {
-    data: applications = [],
-    isLoading: loadingApps
-  } = useQuery<Application[]>({
+    data: appsPages,
+    isLoading: loadingApps,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ["applications", id],
-    queryFn: async () => {
+    queryFn: async ({ pageParam = 1 }: { pageParam: number }) => {
       const token = localStorage.getItem("token");
-      const res = await axios.get<{ data: Application[] }>(
+      const res = await axios.get<{ data: Application[]; total: number; page: number; totalPages: number }>(
         `${API_URL}/jobs/${id}/applications`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        {
+          params: { page: pageParam, limit: PAGE_SIZE },
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
       );
-      return res.data.data ?? [];
+      return res.data;
     },
+    getNextPageParam: (lastPage) =>
+      lastPage.page < lastPage.totalPages ? lastPage.page + 1 : undefined,
+    initialPageParam: 1,
     enabled: !!job && !!user && user.id === job.client.id,
     staleTime: 60_000,
   });
+
+  const applications = appsPages?.pages.flatMap((p) => p.data) ?? [];
+  const totalApplications = appsPages?.pages[0]?.total ?? 0;
 
   const loading = isJobLoading;
 
@@ -1079,9 +1094,16 @@ export default function JobDetailClient() {
           {/* Applicants — visible to owning client only */}
           {isOwnJob && (
             <div className="card mt-8">
-              <h2 className="text-lg font-semibold text-theme-heading mb-4">
-                Applicants
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-theme-heading">
+                  Applicants
+                </h2>
+                {!loadingApps && totalApplications > 0 && (
+                  <span className="text-sm text-theme-text" data-testid="applicants-count">
+                    Showing {applications.length} of {totalApplications} applications
+                  </span>
+                )}
+              </div>
               {loadingApps ? (
                 <div className="flex justify-center py-8">
                   <Loader2
@@ -1094,63 +1116,82 @@ export default function JobDetailClient() {
                   No applications yet.
                 </p>
               ) : (
-                <div className="space-y-4">
-                  {applications.map((app) => (
-                    <div
-                      key={app.id}
-                      className="flex items-center justify-between p-4 bg-theme-bg rounded-lg border border-theme-border"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-stellar-blue to-stellar-purple flex items-center justify-center text-white text-sm font-bold">
-                          {app.freelancer.username.charAt(0).toUpperCase()}
+                <>
+                  <div className="space-y-4">
+                    {applications.map((app) => (
+                      <div
+                        key={app.id}
+                        className="flex items-center justify-between p-4 bg-theme-bg rounded-lg border border-theme-border"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-stellar-blue to-stellar-purple flex items-center justify-center text-white text-sm font-bold">
+                            {app.freelancer.username.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-medium text-theme-heading text-sm">
+                              {app.freelancer.username}
+                            </p>
+                            <p className="text-xs text-theme-text">
+                              Bid: {app.bidAmount.toLocaleString()} XLM
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium text-theme-heading text-sm">
-                            {app.freelancer.username}
-                          </p>
-                          <p className="text-xs text-theme-text">
-                            Bid: {app.bidAmount.toLocaleString()} XLM
-                          </p>
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={app.status} />
+                          {app.status === "PENDING" && (
+                            <>
+                              <button
+                                disabled={actioningApp === app.id}
+                                onClick={() =>
+                                  void handleApplicationStatus(app.id, "ACCEPTED")
+                                }
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-success/10 text-theme-success hover:bg-theme-success/20 transition-colors disabled:opacity-50"
+                              >
+                                {actioningApp === app.id ? (
+                                  <Loader2 size={12} className="animate-spin" />
+                                ) : (
+                                  <UserCheck size={12} />
+                                )}
+                                Accept
+                              </button>
+                              <button
+                                disabled={actioningApp === app.id}
+                                onClick={() =>
+                                  void handleApplicationStatus(app.id, "REJECTED")
+                                }
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-error/10 text-theme-error hover:bg-theme-error/20 transition-colors disabled:opacity-50"
+                              >
+                                {actioningApp === app.id ? (
+                                  <Loader2 size={12} className="animate-spin" />
+                                ) : (
+                                  <XCircle size={12} />
+                                )}
+                                Reject
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <StatusBadge status={app.status} />
-                        {app.status === "PENDING" && (
-                          <>
-                            <button
-                              disabled={actioningApp === app.id}
-                              onClick={() =>
-                                void handleApplicationStatus(app.id, "ACCEPTED")
-                              }
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-success/10 text-theme-success hover:bg-theme-success/20 transition-colors disabled:opacity-50"
-                            >
-                              {actioningApp === app.id ? (
-                                <Loader2 size={12} className="animate-spin" />
-                              ) : (
-                                <UserCheck size={12} />
-                              )}
-                              Accept
-                            </button>
-                            <button
-                              disabled={actioningApp === app.id}
-                              onClick={() =>
-                                void handleApplicationStatus(app.id, "REJECTED")
-                              }
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-theme-error/10 text-theme-error hover:bg-theme-error/20 transition-colors disabled:opacity-50"
-                            >
-                              {actioningApp === app.id ? (
-                                <Loader2 size={12} className="animate-spin" />
-                              ) : (
-                                <XCircle size={12} />
-                              )}
-                              Reject
-                            </button>
-                          </>
+                    ))}
+                  </div>
+                  {hasNextPage && (
+                    <div className="mt-4 flex justify-center">
+                      <button
+                        data-testid="load-more-applications"
+                        onClick={() => void fetchNextPage()}
+                        disabled={isFetchingNextPage}
+                        className="btn-secondary flex items-center gap-2 px-4 py-2 text-sm disabled:opacity-50"
+                      >
+                        {isFetchingNextPage ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <ChevronDown size={14} />
                         )}
-                      </div>
+                        Load more
+                      </button>
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </div>
           )}

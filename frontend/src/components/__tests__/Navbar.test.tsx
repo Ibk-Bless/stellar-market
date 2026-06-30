@@ -48,6 +48,18 @@ jest.mock("@/context/WalletContext", () => ({
   truncateAddress: (a: string) => a,
 }));
 
+// ─── Mock cached wallet balance hook (avoids needing a QueryClientProvider) ──────
+jest.mock("@/hooks/useWalletBalance", () => ({
+  useWalletBalance: () => ({
+    balances: [],
+    isLoading: false,
+    isFetching: false,
+    isRefreshing: false,
+    error: null,
+    refresh: jest.fn(),
+  }),
+}));
+
 // ─── Mock Socket mock ──────────────────────────────────────────────────────────
 const mockSocketHandlers: Record<string, ((...args: unknown[]) => void)[]> = {};
 const mockSocket = {

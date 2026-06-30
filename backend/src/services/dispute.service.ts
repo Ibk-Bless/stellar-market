@@ -256,7 +256,7 @@ export class DisputeService {
   /**
    * Get dispute by ID with full details
    */
-  static async getDisputeById(id: string) {
+  static async getDisputeById(id: string, includeVotes: boolean = false) {
     const dispute = await prisma.dispute.findUnique({
       where: { id },
       include: {
@@ -304,26 +304,38 @@ export class DisputeService {
             avatarUrl: true,
           },
         },
-        votes: {
-          include: {
-            voter: {
-              select: {
-                id: true,
-                username: true,
-                walletAddress: true,
-                avatarUrl: true,
+        votes: includeVotes
+          ? {
+              include: {
+                voter: {
+                  select: {
+                    id: true,
+                    username: true,
+                    walletAddress: true,
+                    avatarUrl: true,
+                  },
+                },
               },
-            },
-          },
-          orderBy: { createdAt: "desc" },
-        },
+              orderBy: { createdAt: "desc" },
+            }
+          : false,
         attachments: true,
+        _count: { select: { votes: true } },
       },
     });
 
     if (!dispute) {
       throw new Error("Dispute not found");
     }
+
+    const votes = await prisma.disputeVote.findMany({
+      where: { disputeId: id },
+      select: { choice: true },
+    });
+    const totalVotes = votes.length;
+    const clientVotes = votes.filter((v) => v.choice === "CLIENT").length;
+    const freelancerVotes = votes.filter((v) => v.choice === "FREELANCER").length;
+    const splitVotes = totalVotes - clientVotes - freelancerVotes;
 
     let arbitrators: Array<{ address: string; displayName: string; avatarUrl: string | null }> = [];
     if (dispute.onChainDisputeId) {
@@ -357,9 +369,55 @@ export class DisputeService {
       }
     }
 
+    const { votes: _votes, _count, ...rest } = dispute;
+
     return {
-      ...dispute,
+      ...rest,
+      voteSummary: {
+        totalVotes,
+        clientVotes,
+        freelancerVotes,
+        splitVotes,
+      },
       arbitrators,
+    };
+  }
+
+  static async getVotesByDisputeId(
+    disputeId: string,
+    cursor?: string,
+    limit: number = 20,
+  ) {
+    const safeLimit = Math.min(limit, 100);
+
+    const votes = await prisma.disputeVote.findMany({
+      where: { disputeId },
+      take: safeLimit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include: {
+        voter: {
+          select: {
+            id: true,
+            username: true,
+            walletAddress: true,
+            avatarUrl: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const hasMore = votes.length > safeLimit;
+    const items = hasMore ? votes.slice(0, safeLimit) : votes;
+    const nextCursor = hasMore ? items[items.length - 1].id : null;
+
+    return {
+      votes: items,
+      pagination: {
+        nextCursor,
+        hasMore,
+        limit: safeLimit,
+      },
     };
   }
 
@@ -464,14 +522,14 @@ export class DisputeService {
    * Get disputes with filtering and pagination
    */
   static async getDisputes(
-    filters: { status?: DisputeStatus },
+    filters: { status?: DisputeStatus; userFilter?: Record<string, unknown> },
     pagination: { page: number; limit: number },
   ) {
-    const { status } = filters;
+    const { status, userFilter } = filters;
     const { page, limit } = pagination;
     const skip = (page - 1) * limit;
 
-    const where = status ? { status } : {};
+    const where = { ...(status ? { status } : {}), ...userFilter };
 
     const [disputes, total] = await Promise.all([
       prisma.dispute.findMany({
