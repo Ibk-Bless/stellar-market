@@ -7,7 +7,7 @@ import {
   useCallback,
   FormEvent,
 } from "react";
-import { Send } from "lucide-react";
+import { Send, ChevronDown } from "lucide-react";
 import { useSocket } from "@/context/SocketContext";
 import TypingIndicator from "./TypingIndicator";
 
@@ -41,14 +41,58 @@ export default function ChatWindow({
   const [input, setInput] = useState("");
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [showNewMessageBadge, setShowNewMessageBadge] = useState(false);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isTypingRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Scroll to bottom whenever messages change
+  // Track if user is at bottom using IntersectionObserver
   useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const isVisible = entries[0]?.isIntersecting;
+        setIsAtBottom(isVisible ?? false);
+        if (isVisible) {
+          setShowNewMessageBadge(false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
+
+  // Scroll to bottom on initial load
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "auto" });
+  }, []);
+
+  // Handle new messages: auto-scroll if at bottom, show badge if not
+  useEffect(() => {
+    if (messages.length === 0) return;
+    
+    if (isAtBottom) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      setShowNewMessageBadge(false);
+    } else {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.senderId !== currentUserId) {
+        setShowNewMessageBadge(true);
+      }
+    }
+  }, [messages, isAtBottom, currentUserId]);
+
+  const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isPartnerTyping]);
+    setShowNewMessageBadge(false);
+  }, []);
 
   // Mark messages as read when chat opens
   useEffect(() => {
@@ -148,7 +192,10 @@ export default function ChatWindow({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-3 relative"
+      >
         {messages.map((msg) => {
           const isOwn = msg.senderId === currentUserId;
           return (
@@ -178,7 +225,20 @@ export default function ChatWindow({
         })}
 
         <TypingIndicator isTyping={isPartnerTyping} username={partnerUsername} />
+        <div ref={sentinelRef} className="h-1" />
         <div ref={bottomRef} />
+
+        {/* New message badge */}
+        {showNewMessageBadge && (
+          <button
+            onClick={scrollToBottom}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-stellar-blue text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 hover:bg-stellar-purple transition-colors z-10 animate-slide-in"
+            aria-label="Scroll to new messages"
+          >
+            New message
+            <ChevronDown size={16} />
+          </button>
+        )}
       </div>
 
       {/* Input */}

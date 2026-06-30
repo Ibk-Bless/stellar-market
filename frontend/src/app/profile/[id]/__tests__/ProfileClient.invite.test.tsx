@@ -1,15 +1,22 @@
 import "@testing-library/jest-dom";
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import axios from "axios";
 import ProfileClient from "../ProfileClient";
 import { ToastProvider } from "@/components/Toast";
 
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
+
 const renderProfile = () =>
   render(
-    <ToastProvider>
-      <ProfileClient />
-    </ToastProvider>,
+    <QueryClientProvider client={queryClient}>
+      <ToastProvider>
+        <ProfileClient />
+      </ToastProvider>
+    </QueryClientProvider>,
   );
 
 jest.mock("axios");
@@ -28,6 +35,13 @@ jest.mock("next/link", () => {
 // ContractService.getReputation runs against a wallet; stub it out.
 jest.mock("@/services/ContractService", () => ({
   ContractService: { getReputation: jest.fn().mockResolvedValue(null) },
+  ReputationResult: {},
+  DEFAULT_BADGE_TIERS: [
+    { name: "Bronze", minScore: 100, colour: "#CD7F32" },
+    { name: "Silver", minScore: 300, colour: "#C0C0C0" },
+    { name: "Gold", minScore: 500, colour: "#FFD700" },
+    { name: "Platinum", minScore: 700, colour: "#E5E4E2" },
+  ],
 }));
 
 // Drive the viewer role per-test.

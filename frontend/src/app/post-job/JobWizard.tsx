@@ -273,20 +273,48 @@ export default function JobWizard() {
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       {/* Progress indicator */}
-      <div className="mb-8">
-        <div className="flex items-center justify-center gap-4">
-          {[1, 2, 3].map((step) => (
+      <div className="mb-8" role="navigation" aria-label="Job posting progress">
+        <div className="flex items-center justify-center gap-2">
+          {[
+            { step: 1, label: "Job Details" },
+            { step: 2, label: "Milestones" },
+            { step: 3, label: "Preview" },
+          ].map(({ step, label }, index) => (
             <div key={step} className="flex items-center">
-              <div
+              <button
+                type="button"
+                onClick={() => {
+                  if (step < currentStep) {
+                    setCurrentStep(step);
+                  }
+                }}
+                disabled={step > currentStep}
                 className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold transition-all ${
-                  currentStep >= step
-                    ? "bg-stellar-blue text-white"
-                    : "bg-theme-border text-theme-text"
+                  currentStep === step
+                    ? "bg-stellar-blue text-white ring-2 ring-stellar-blue ring-offset-2"
+                    : currentStep > step
+                    ? "bg-stellar-blue text-white hover:bg-stellar-purple cursor-pointer"
+                    : "bg-theme-border text-theme-text cursor-not-allowed"
+                }`}
+                aria-current={currentStep === step ? "step" : undefined}
+                aria-label={`${label}${
+                  currentStep === step
+                    ? " (current step)"
+                    : currentStep > step
+                    ? " (completed)"
+                    : " (upcoming)"
                 }`}
               >
                 {step}
-              </div>
-              {step < 3 && <div className="w-16 h-1 bg-theme-border mx-2" />}
+              </button>
+              {index < 2 && (
+                <div
+                  className={`w-16 h-1 mx-2 transition-colors ${
+                    currentStep > step ? "bg-stellar-blue" : "bg-theme-border"
+                  }`}
+                  aria-hidden="true"
+                />
+              )}
             </div>
           ))}
         </div>
@@ -298,7 +326,7 @@ export default function JobWizard() {
                 : "text-theme-text"
             }
           >
-            Basic Info
+            Job Details
           </span>
           <span
             className={
@@ -332,7 +360,7 @@ export default function JobWizard() {
         {currentStep === 1 && (
           <div className="space-y-6">
             <h2 className="text-2xl font-bold text-theme-heading">
-              Basic Information
+              Job Details
             </h2>
 
             <div>

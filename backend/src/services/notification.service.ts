@@ -1,4 +1,4 @@
-import { PrismaClient, NotificationType } from "@prisma/client";
+import { Notification, PrismaClient, NotificationType } from "@prisma/client";
 import { getIo } from "../socket";
 import { EmailService } from "./email.service";
 import { config } from "../config";

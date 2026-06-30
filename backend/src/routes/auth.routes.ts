@@ -24,12 +24,14 @@ import {
   walletVerifySchema,
   forgotPasswordSchema,
   resetPasswordSchema,
+  changePasswordSchema,
   verifyEmailParamSchema,
   twoFactorVerifySchema,
   twoFactorDisableSchema,
   twoFactorValidateSchema,
 } from "../schemas";
 import RedisClient from "../lib/redis";
+import { invalidateTokenVersionCache } from "../lib/token-version";
 import { generateToken, hashToken } from "../utils/token";
 import { sendPasswordResetEmail, sendVerificationEmail } from "../utils/email";
 
@@ -44,6 +46,23 @@ function setRefreshCookie(res: Response, token: string) {
     maxAge: REFRESH_TOKEN_EXPIRY_MS,
     path: "/",
   });
+}
+
+/**
+ * Sign a full-session access token. The user's `tokenVersion` is embedded as a
+ * claim so the auth middleware can reject the token after a password change
+ * increments the stored version (issue #787).
+ */
+function signAccessToken(
+  userId: string,
+  tokenVersion: number,
+  extraClaims: Record<string, unknown> = {},
+): string {
+  return jwt.sign(
+    { userId, tokenVersion, ...extraClaims },
+    config.jwtSecret,
+    { expiresIn: ACCESS_TOKEN_EXPIRY },
+  );
 }
 
 async function issueRefreshToken(userId: string): Promise<string> {
@@ -122,10 +141,9 @@ async function sendSession(res: Response, user: {
   role: "CLIENT" | "FREELANCER" | "ADMIN";
   emailVerified?: boolean;
   password?: string | null;
+  tokenVersion?: number;
 }, status = 200) {
-  const token = jwt.sign({ userId: user.id }, config.jwtSecret, {
-    expiresIn: ACCESS_TOKEN_EXPIRY,
-  });
+  const token = signAccessToken(user.id, user.tokenVersion ?? 0);
   const refreshRaw = await issueRefreshToken(user.id);
   setRefreshCookie(res, refreshRaw);
   res.status(status).json({ user: userPayload(user), token });
@@ -475,11 +493,9 @@ router.post(
     });
 
     // Issue a fresh access token that includes the verified walletAddress claim
-    const token = jwt.sign(
-      { userId: user.id, walletAddress: user.walletAddress },
-      config.jwtSecret,
-      { expiresIn: ACCESS_TOKEN_EXPIRY },
-    );
+    const token = signAccessToken(user.id, user.tokenVersion, {
+      walletAddress: user.walletAddress,
+    });
     const refreshRaw = await issueRefreshToken(user.id);
     setRefreshCookie(res, refreshRaw);
 
@@ -680,9 +696,7 @@ router.post(
     if (/^\d{6}$/.test(code)) {
       const result = verifySync({ token: code, secret });
       if (result.valid) {
-        const token = jwt.sign({ userId: user.id }, config.jwtSecret, {
-          expiresIn: ACCESS_TOKEN_EXPIRY,
-        });
+        const token = signAccessToken(user.id, user.tokenVersion);
         const refreshRaw = await issueRefreshToken(user.id);
         setRefreshCookie(res, refreshRaw);
         return res.json({
@@ -711,9 +725,7 @@ router.post(
           data: { backupCodes: updatedCodes },
         });
 
-        const token = jwt.sign({ userId: user.id }, config.jwtSecret, {
-          expiresIn: ACCESS_TOKEN_EXPIRY,
-        });
+        const token = signAccessToken(user.id, user.tokenVersion);
         const refreshRaw = await issueRefreshToken(user.id);
         setRefreshCookie(res, refreshRaw);
         return res.json({
@@ -795,10 +807,55 @@ router.post(
         password: hashedPassword,
         passwordResetToken: null,
         passwordResetExpiry: null,
+        // Invalidate every JWT issued before this reset (issue #787).
+        tokenVersion: { increment: 1 },
       },
     });
+    await invalidateTokenVersionCache(user.id);
 
     res.json({ message: "Password has been reset successfully." });
+  }),
+);
+
+// Change password — authenticated, requires the current password. Increments
+// tokenVersion to invalidate all other sessions, then returns a fresh token so
+// the caller's current client stays signed in (issue #787).
+router.post(
+  "/change-password",
+  authenticate,
+  validate({ body: changePasswordSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { currentPassword, newPassword } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id: req.userId } });
+    if (!user || !user.password) {
+      return res.status(400).json({ error: "Password change is not available for this account." });
+    }
+
+    const validPassword = await bcrypt.compare(currentPassword, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ error: "Current password is incorrect." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        // Invalidate every JWT issued before this change (issue #787).
+        tokenVersion: { increment: 1 },
+      },
+      select: { id: true, tokenVersion: true },
+    });
+    await invalidateTokenVersionCache(user.id);
+
+    // Re-issue this session with the new tokenVersion so the caller is not
+    // logged out by the invalidation they just triggered.
+    const token = signAccessToken(updated.id, updated.tokenVersion);
+    const refreshRaw = await issueRefreshToken(user.id);
+    setRefreshCookie(res, refreshRaw);
+
+    res.json({ message: "Password changed successfully.", token });
   }),
 );
 
@@ -851,7 +908,7 @@ router.post(
 
     const user = await prisma.user.findUnique({
       where: { id: stored.userId },
-      select: { id: true, isSuspended: true },
+      select: { id: true, isSuspended: true, tokenVersion: true },
     });
 
     if (!user) {
@@ -862,9 +919,7 @@ router.post(
       return res.status(403).json({ error: "Account suspended." });
     }
 
-    const token = jwt.sign({ userId: stored.userId }, config.jwtSecret, {
-      expiresIn: ACCESS_TOKEN_EXPIRY,
-    });
+    const token = signAccessToken(user.id, user.tokenVersion);
 
     res.json({ token });
   }),

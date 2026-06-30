@@ -49,7 +49,7 @@
                           ]
                         },
                         "val": {
-                          "u32": 50
+                          "u32": 0
                         }
                       },
                       {
@@ -184,7 +184,7 @@
                   "u32": 1
                 },
                 {
-                  "u32": 50
+                  "u32": 0
                 }
               ]
             }
@@ -229,7 +229,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "propose_admin_action"
+                "symbol": "set_max_decay_rate"
               }
             ],
             "data": {
@@ -238,14 +238,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "vec": [
-                    {
-                      "symbol": "SetDecayRate"
-                    },
-                    {
-                      "u32": 21
-                    }
-                  ]
+                  "u32": 51
                 }
               ]
             }
@@ -253,46 +246,6 @@
         }
       },
       "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "msig"
-              },
-              {
-                "symbol": "proposed"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "u64": 1
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "vec": [
-                    {
-                      "symbol": "SetDecayRate"
-                    },
-                    {
-                      "u32": 21
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": true
     },
     {
       "event": {
@@ -306,7 +259,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "propose_admin_action"
+                "symbol": "set_max_decay_rate"
               }
             ],
             "data": {
@@ -367,7 +320,7 @@
                   "string": "contract call failed"
                 },
                 {
-                  "symbol": "propose_admin_action"
+                  "symbol": "set_max_decay_rate"
                 },
                 {
                   "vec": [
@@ -375,14 +328,7 @@
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                     },
                     {
-                      "vec": [
-                        {
-                          "symbol": "SetDecayRate"
-                        },
-                        {
-                          "u32": 21
-                        }
-                      ]
+                      "u32": 51
                     }
                   ]
                 }
