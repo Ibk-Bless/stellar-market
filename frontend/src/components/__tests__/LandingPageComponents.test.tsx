@@ -96,8 +96,8 @@ describe("Landing Page Components", () => {
       render(<StatsSection />);
       
       await waitFor(() => {
-        expect(screen.getByText("1,500+")).toBeInTheDocument();
-        expect(screen.getByText("5,000+")).toBeInTheDocument();
+        expect(screen.getByText(/1[,\s\xA0]500\+/)).toBeInTheDocument();
+        expect(screen.getByText(/5[,\s\xA0]000\+/)).toBeInTheDocument();
         expect(screen.getByText("2.5M")).toBeInTheDocument();
         expect(screen.getByText("99%")).toBeInTheDocument();
       });

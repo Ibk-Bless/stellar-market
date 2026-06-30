@@ -9,6 +9,9 @@ import { useWallet } from "@/context/WalletContext";
 import { useToast } from "@/components/Toast";
 import WalletAddress from "@/components/WalletAddress";
 import SkillCombobox from "@/components/SkillCombobox";
+import { useForm, Controller } from "react-hook-form";
+import { useUnsavedChangesWarning } from "@/hooks/useUnsavedChangesWarning";
+import UnsavedChangesModal from "@/components/UnsavedChangesModal";
 import { resizeImage, createImagePreview } from "@/utils/image";
 import {
   User,
@@ -60,20 +63,41 @@ export default function SettingsPage() {
 
   // Seed form fields immediately from auth-context user so the form is never
   // blank while the fresh API fetch is in-flight (or if it fails).
-  const [username, setUsername] = useState(user?.username ?? "");
-  const [email, setEmail] = useState(user?.email ?? "");
-  const [bio, setBio] = useState(user?.bio ?? "");
-  const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? "");
-  const [role, setRole] = useState<"CLIENT" | "FREELANCER">(
-    user?.role === "CLIENT" || user?.role === "FREELANCER" ? user.role : "FREELANCER",
-  );
-  const [availabilityStatus, setAvailabilityStatus] = useState<"available" | "busy" | "unavailable">(
-    user?.availability === false ? "unavailable" : "available"
-  );
-  const [skills, setSkills] = useState<string[]>(user?.skills ?? []);
+  type ProfileFormValues = {
+    username: string;
+    email: string;
+    bio: string;
+    avatarUrl: string;
+    role: "CLIENT" | "FREELANCER";
+    availabilityStatus: "available" | "busy" | "unavailable";
+    skills: string[];
+  };
+
+  const { 
+    register, 
+    handleSubmit: hookFormSubmit, 
+    setValue, 
+    watch, 
+    control, 
+    reset, 
+    formState: { errors: formErrors, isDirty } 
+  } = useForm<ProfileFormValues>({
+    defaultValues: {
+      username: user?.username ?? "",
+      email: user?.email ?? "",
+      bio: user?.bio ?? "",
+      avatarUrl: user?.avatarUrl ?? "",
+      role: user?.role === "CLIENT" || user?.role === "FREELANCER" ? user.role : "FREELANCER",
+      availabilityStatus: user?.availability === false ? "unavailable" : "available",
+      skills: user?.skills ?? [],
+    }
+  });
+
+  const { showModal, confirmLeave, cancelLeave } = useUnsavedChangesWarning(isDirty);
+
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string>("");
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [generalError, setGeneralError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isPageLoading, setIsPageLoading] = useState(!user);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
@@ -121,14 +145,16 @@ export default function SettingsPage() {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = res.data;
-        setUsername(data.username ?? "");
-        setEmail(data.email ?? "");
-        setBio(data.bio ?? "");
-        setAvatarUrl(data.avatarUrl ?? "");
-        setRole(data.role ?? "FREELANCER");
-        setSkills(data.skills ?? []);
+        reset({
+          username: data.username ?? "",
+          email: data.email ?? "",
+          bio: data.bio ?? "",
+          avatarUrl: data.avatarUrl ?? "",
+          role: data.role ?? "FREELANCER",
+          availabilityStatus: data.availability === false ? "unavailable" : "available",
+          skills: data.skills ?? [],
+        });
         setTwoFAEnabled(data.twoFactorEnabled ?? false);
-        setAvailabilityStatus(data.availability === false ? "unavailable" : "available");
         updateUser({
           walletAddress: data.walletAddress ?? null,
           email: data.email ?? undefined,
@@ -298,41 +324,12 @@ export default function SettingsPage() {
 
   // ─── Profile Functions ──────────────────────────────────────────────────────
 
-  function validate(): boolean {
-    const newErrors: FormErrors = {};
-
-    if (!username || username.length < 3) {
-      newErrors.username = "Username must be at least 3 characters.";
-    } else if (username.length > 30) {
-      newErrors.username = "Username must be at most 30 characters.";
-    } else if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-      newErrors.username = "Username can only contain letters, numbers, hyphens, and underscores.";
-    }
-
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      newErrors.email = "Please enter a valid email address.";
-    }
-
-    if (bio && bio.length > 500) {
-      newErrors.bio = "Bio must be at most 500 characters.";
-    }
-
-    if (avatarUrl && !/^https?:\/\/.+/.test(avatarUrl)) {
-      newErrors.avatarUrl = "Please enter a valid URL.";
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  }
-
   async function handleAvatarFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      toast.error("Please select an image file");
-      return;
-    }
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
 
     if (file.size > 5 * 1024 * 1024) {
       toast.error("Image must be less than 5MB");
@@ -354,7 +351,6 @@ export default function SettingsPage() {
       toast.error("Failed to process image. Please try another file.");
     }
   }
-
   async function handleAvatarUpload() {
     if (!avatarFile || !token) return;
 
@@ -370,7 +366,7 @@ export default function SettingsPage() {
         },
       });
 
-      setAvatarUrl(res.data.avatarUrl);
+      setValue("avatarUrl", res.data.avatarUrl, { shouldDirty: true });
       updateUser({ avatarUrl: res.data.avatarUrl });
       setAvatarFile(null);
       setAvatarPreview("");
@@ -383,25 +379,22 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!validate()) return;
-
+  const onSubmit = async (data: ProfileFormValues) => {
     setIsSaving(true);
-    setErrors({});
+    setGeneralError(null);
 
     try {
       const payload: Record<string, any> = { // eslint-disable-line @typescript-eslint/no-explicit-any
-        username,
-        role,
-        skills,
-        availability: availabilityStatus !== "unavailable",
+        username: data.username,
+        role: data.role,
+        skills: data.skills,
+        availability: data.availabilityStatus !== "unavailable",
       };
-      if (email) payload.email = email;
+      if (data.email) payload.email = data.email;
       else payload.email = null;
-      if (bio) payload.bio = bio;
+      if (data.bio) payload.bio = data.bio;
       else payload.bio = null;
-      if (avatarUrl) payload.avatarUrl = avatarUrl;
+      if (data.avatarUrl) payload.avatarUrl = data.avatarUrl;
       else payload.avatarUrl = null;
 
       const res = await axios.put(`${API_URL}/users/me`, payload, {
@@ -409,16 +402,17 @@ export default function SettingsPage() {
       });
 
       updateUser(res.data);
+      reset(data);
       toast.success("Profile updated successfully!");
     } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
       const message =
         error.response?.data?.error || "Failed to update profile. Please try again.";
-      setErrors({ general: message });
+      setGeneralError(message);
       toast.error(message);
     } finally {
       setIsSaving(false);
     }
-  }
+  };
 
   if (authLoading || isPageLoading) {
     return (
@@ -606,12 +600,12 @@ export default function SettingsPage() {
 
         {/* Profile Tab */}
         {activeSettingsTab === "profile" && (
-          <form onSubmit={handleSubmit} className="card space-y-6">
+          <form onSubmit={hookFormSubmit(onSubmit)} className="card space-y-6">
             <h2 className="text-xl font-semibold text-theme-heading">Edit Profile</h2>
 
-            {errors.general && (
+            {generalError && (
               <div className="bg-theme-error/10 border border-theme-error/20 text-theme-error rounded-lg px-4 py-3 text-sm">
-                {errors.general}
+                {generalError}
               </div>
             )}
 
@@ -626,15 +620,19 @@ export default function SettingsPage() {
               <input
                 id="username"
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                {...register("username", { 
+                  required: "Username is required", 
+                  minLength: { value: 3, message: "Username must be at least 3 characters." },
+                  maxLength: { value: 30, message: "Username must be at most 30 characters." },
+                  pattern: { value: /^[a-zA-Z0-9_-]+$/, message: "Username can only contain letters, numbers, hyphens, and underscores." }
+                })}
                 className="input-field"
                 placeholder="Your username"
-                aria-describedby={errors.username ? "username-error" : undefined}
+                aria-describedby={formErrors.username ? "username-error" : undefined}
               />
-              {errors.username && (
+              {formErrors.username && (
                 <p id="username-error" className="text-theme-error text-xs mt-1">
-                  {errors.username}
+                  {formErrors.username.message}
                 </p>
               )}
             </div>
@@ -650,15 +648,16 @@ export default function SettingsPage() {
               <input
                 id="email"
                 type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                {...register("email", {
+                  pattern: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "Please enter a valid email address." }
+                })}
                 className="input-field"
                 placeholder="your@email.com"
-                aria-describedby={errors.email ? "email-error" : undefined}
+                aria-describedby={formErrors.email ? "email-error" : undefined}
               />
-              {errors.email && (
+              {formErrors.email && (
                 <p id="email-error" className="text-theme-error text-xs mt-1">
-                  {errors.email}
+                  {formErrors.email.message}
                 </p>
               )}
             </div>
@@ -673,23 +672,23 @@ export default function SettingsPage() {
               </label>
               <textarea
                 id="bio"
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
+                {...register("bio", {
+                  maxLength: { value: 500, message: "Bio must be at most 500 characters." }
+                })}
                 className="input-field min-h-[120px] resize-y"
                 placeholder="Tell us about yourself..."
-                maxLength={500}
-                aria-describedby={errors.bio ? "bio-error" : "bio-count"}
+                aria-describedby={formErrors.bio ? "bio-error" : "bio-count"}
               />
               <div className="flex justify-between mt-1">
-                {errors.bio ? (
+                {formErrors.bio ? (
                   <p id="bio-error" className="text-theme-error text-xs">
-                    {errors.bio}
+                    {formErrors.bio.message}
                   </p>
                 ) : (
                   <span />
                 )}
                 <span id="bio-count" className="text-theme-text text-xs">
-                  {bio.length}/500
+                  {(watch("bio") || "").length}/500
                 </span>
               </div>
             </div>
@@ -705,21 +704,22 @@ export default function SettingsPage() {
               <input
                 id="avatarUrl"
                 type="url"
-                value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
+                {...register("avatarUrl", {
+                  pattern: { value: /^https?:\/\/.+/, message: "Please enter a valid URL." }
+                })}
                 className="input-field"
                 placeholder="https://example.com/avatar.png"
-                aria-describedby={errors.avatarUrl ? "avatar-error" : undefined}
+                aria-describedby={formErrors.avatarUrl ? "avatar-error" : undefined}
               />
-              {errors.avatarUrl && (
+              {formErrors.avatarUrl && (
                 <p id="avatar-error" className="text-theme-error text-xs mt-1">
-                  {errors.avatarUrl}
+                  {formErrors.avatarUrl.message}
                 </p>
               )}
-              {avatarUrl && !errors.avatarUrl && (
+              {watch("avatarUrl") && !formErrors.avatarUrl && (
                 <div className="mt-3 flex items-center gap-3">
                   <Image
-                    src={avatarUrl}
+                    src={watch("avatarUrl")}
                     alt="Avatar preview"
                     width={48}
                     height={48}
@@ -801,12 +801,15 @@ export default function SettingsPage() {
               <label className="block text-sm font-medium text-theme-heading mb-2">
                 Skills
               </label>
-              <SkillCombobox skills={skills} onChange={setSkills} />
-              {skills.length === 0 && (
+              <Controller
+                name="skills"
+                control={control}
+                render={({ field }) => (
+                  <SkillCombobox skills={field.value} onChange={field.onChange} />
+                )}
+              />
+              {watch("skills").length === 0 && (
                 <p className="text-theme-text text-sm mt-3">No skills added yet</p>
-              )}
-              {errors.skills && (
-                <p className="text-theme-error text-xs mt-1">{errors.skills}</p>
               )}
             </div>
 
@@ -818,25 +821,25 @@ export default function SettingsPage() {
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setRole("CLIENT")}
+                  onClick={() => setValue("role", "CLIENT", { shouldDirty: true })}
                   className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-colors ${
-                    role === "CLIENT"
+                    watch("role") === "CLIENT"
                       ? "bg-stellar-blue/20 border-stellar-blue text-stellar-blue"
                       : "bg-theme-card border-theme-border text-theme-text hover:border-theme-text"
                   }`}
-                  aria-pressed={role === "CLIENT"}
+                  aria-pressed={watch("role") === "CLIENT"}
                 >
                   Client
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRole("FREELANCER")}
+                  onClick={() => setValue("role", "FREELANCER", { shouldDirty: true })}
                   className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-colors ${
-                    role === "FREELANCER"
+                    watch("role") === "FREELANCER"
                       ? "bg-stellar-purple/20 border-stellar-purple text-stellar-purple"
                       : "bg-theme-card border-theme-border text-theme-text hover:border-theme-text"
                   }`}
-                  aria-pressed={role === "FREELANCER"}
+                  aria-pressed={watch("role") === "FREELANCER"}
                 >
                   Freelancer
                 </button>
@@ -844,7 +847,7 @@ export default function SettingsPage() {
             </div>
 
             {/* Availability Status (freelancers only) */}
-            {role === "FREELANCER" && (
+            {watch("role") === "FREELANCER" && (
               <div>
                 <label className="block text-sm font-medium text-theme-heading mb-3">
                   Availability Status
@@ -860,13 +863,13 @@ export default function SettingsPage() {
                       <button
                         key={status}
                         type="button"
-                        onClick={() => setAvailabilityStatus(status)}
+                        onClick={() => setValue("availabilityStatus", status, { shouldDirty: true })}
                         className={`flex-1 py-3 px-4 rounded-lg border text-sm font-medium transition-colors ${
-                          availabilityStatus === status
+                          watch("availabilityStatus") === status
                             ? config.active
                             : "bg-theme-card border-theme-border text-theme-text hover:border-theme-text"
                         }`}
-                        aria-pressed={availabilityStatus === status}
+                        aria-pressed={watch("availabilityStatus") === status}
                       >
                         {config.label}
                       </button>
@@ -898,6 +901,12 @@ export default function SettingsPage() {
             </div>
           </form>
         )}
+
+        <UnsavedChangesModal 
+          isOpen={showModal} 
+          onConfirm={confirmLeave} 
+          onCancel={cancelLeave} 
+        />
 
         {/* Security Tab */}
         {activeSettingsTab === "security" && (

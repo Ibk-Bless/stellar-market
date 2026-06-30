@@ -222,7 +222,8 @@ app.use("/api", (req, res, next) => {
   const deprecationDate = new Date(Date.now() + 6 * 30 * 24 * 60 * 60 * 1000).toUTCString();
   res.setHeader("Deprecation", `date="${deprecationDate}"`);
   res.setHeader("Link", `</api/v1${req.path}>; rel="successor-version"`);
-  return res.redirect(301, `/api/v1${req.path}${req.search || ""}`);
+  const search = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  return res.redirect(301, `/api/v1${req.path}${search}`);
 });
 
 // API routes
