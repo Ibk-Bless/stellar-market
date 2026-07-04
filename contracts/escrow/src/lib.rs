@@ -1725,39 +1725,6 @@ impl EscrowContract {
             return Err(EscrowError::InvalidStatus);
         }
 
-        // Release payment for this milestone
-        let token_client = token::Client::new(&env, &job.token);
-
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("FEE"))
-            .unwrap_or(0);
-        let treasury: Address = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("TRE"))
-            .unwrap_or(env.current_contract_address()); // Fallback to contract itself if not set, though it should be
-
-        let fee_amount = (milestone.amount * fee_bps as i128) / 10_000;
-        let freelancer_amount = milestone.amount - fee_amount;
-
-        if fee_amount > 0 {
-            token_client.transfer(&env.current_contract_address(), &treasury, &fee_amount);
-
-            // Emit fee collected event
-            env.events().publish(
-                (symbol_short!("escrow"), symbol_short!("fee")),
-                (job_id, milestone_id, fee_amount, treasury.clone()),
-            );
-        }
-
-        token_client.transfer(
-            &env.current_contract_address(),
-            &job.freelancer,
-            &freelancer_amount,
-        );
-
         let updated = Milestone {
             id: milestone.id,
             description: milestone.description.clone(),
@@ -1867,41 +1834,6 @@ impl EscrowContract {
             if env.storage().persistent().has(&auto_key) {
                 env.storage().persistent().remove(&auto_key);
             }
-        }
-
-        // Transfer all payments in a single transaction
-        if total_released > 0 {
-            let token_client = token::Client::new(&env, &job.token);
-
-            let fee_bps: u32 = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("FEE"))
-                .unwrap_or(0);
-            let treasury: Address = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("TRE"))
-                .unwrap_or(env.current_contract_address());
-
-            let fee_amount = (total_released * fee_bps as i128) / 10_000;
-            let freelancer_amount = total_released - fee_amount;
-
-            if fee_amount > 0 {
-                token_client.transfer(&env.current_contract_address(), &treasury, &fee_amount);
-
-                // Emit fee collected event for the batch
-                env.events().publish(
-                    (symbol_short!("escrow"), symbol_short!("fee_batch")),
-                    (job_id, fee_amount, treasury),
-                );
-            }
-
-            token_client.transfer(
-                &env.current_contract_address(),
-                &job.freelancer,
-                &freelancer_amount,
-            );
         }
 
         job.milestones = milestones.clone();

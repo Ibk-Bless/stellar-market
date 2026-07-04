@@ -1330,16 +1330,21 @@
           "v0": {
             "topics": [
               {
+                "symbol": "escrow"
+              },
+              {
                 "symbol": "paused"
               }
             ],
             "data": {
-              "vec": [
+              "map": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                },
-                {
-                  "u64": 172801
+                  "key": {
+                    "symbol": "paused_by"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
                 }
               ]
             }

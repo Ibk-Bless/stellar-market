@@ -185,26 +185,26 @@
                     {
                       "vec": [
                         {
-                          "string": "Task 1"
+                          "string": "Task 2"
                         },
                         {
                           "i128": {
                             "hi": 0,
-                            "lo": 100
+                            "lo": 200
                           }
                         },
                         {
-                          "u64": 1000000
+                          "u64": 2000000
                         }
                       ]
                     }
                   ]
                 },
                 {
-                  "u64": 1000000
+                  "u64": 3000000
                 },
                 {
-                  "u64": 2500
+                  "u64": 604800
                 },
                 {
                   "u32": 518400
@@ -465,7 +465,7 @@
                         "symbol": "auto_refund_after"
                       },
                       "val": {
-                        "u64": 2500
+                        "u64": 604800
                       }
                     },
                     {
@@ -516,7 +516,7 @@
                         "symbol": "job_deadline"
                       },
                       "val": {
-                        "u64": 1000000
+                        "u64": 3000000
                       }
                     },
                     {
@@ -534,7 +534,7 @@
                                 "val": {
                                   "i128": {
                                     "hi": 0,
-                                    "lo": 100
+                                    "lo": 200
                                   }
                                 }
                               },
@@ -543,7 +543,7 @@
                                   "symbol": "deadline"
                                 },
                                 "val": {
-                                  "u64": 1000000
+                                  "u64": 2000000
                                 }
                               },
                               {
@@ -551,7 +551,7 @@
                                   "symbol": "description"
                                 },
                                 "val": {
-                                  "string": "Task 1"
+                                  "string": "Task 2"
                                 }
                               },
                               {
@@ -606,7 +606,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 100
+                          "lo": 200
                         }
                       }
                     }
@@ -1741,16 +1741,21 @@
           "v0": {
             "topics": [
               {
+                "symbol": "escrow"
+              },
+              {
                 "symbol": "paused"
               }
             ],
             "data": {
-              "vec": [
+              "map": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                },
-                {
-                  "u64": 172801
+                  "key": {
+                    "symbol": "paused_by"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
                 }
               ]
             }
@@ -1897,16 +1902,21 @@
           "v0": {
             "topics": [
               {
+                "symbol": "escrow"
+              },
+              {
                 "symbol": "unpaused"
               }
             ],
             "data": {
-              "vec": [
+              "map": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                },
-                {
-                  "u64": 172801
+                  "key": {
+                    "symbol": "unpaused_by"
+                  },
+                  "val": {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
                 }
               ]
             }
@@ -2006,26 +2016,26 @@
                     {
                       "vec": [
                         {
-                          "string": "Task 1"
+                          "string": "Task 2"
                         },
                         {
                           "i128": {
                             "hi": 0,
-                            "lo": 100
+                            "lo": 200
                           }
                         },
                         {
-                          "u64": 1000000
+                          "u64": 2000000
                         }
                       ]
                     }
                   ]
                 },
                 {
-                  "u64": 1000000
+                  "u64": 3000000
                 },
                 {
-                  "u64": 2500
+                  "u64": 604800
                 },
                 {
                   "u32": 518400
@@ -2069,7 +2079,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 100
+                    "lo": 200
                   }
                 }
               ]
