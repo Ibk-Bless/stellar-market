@@ -929,6 +929,7 @@ export function stopHorizonListener(): void {
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
+  }
   running = false;
   if (timerId) {
     clearTimeout(timerId);

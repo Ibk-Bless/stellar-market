@@ -53,6 +53,7 @@ describe("getHealthStatus", () => {
       database: "ok",
       redis: "ok",
       sorobanRpc: "ok",
+    });
     expect(result).toEqual({
       status: "ok",
       service: "stellarmarket-api",

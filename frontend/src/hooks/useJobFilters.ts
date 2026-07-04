@@ -76,7 +76,12 @@ export function parseFiltersFromParams(searchParams: URLSearchParams): JobFilter
 export function filtersToParams(filters: JobFilters): URLSearchParams {
   const params = new URLSearchParams();
   if (filters.search) params.set("q", filters.search);
-  if (filters.category !== "All") params.set("category", categoryToSlug(filters.category));
+  if (filters.category !== "All") {
+    const slug = CANONICAL_CATEGORIES.includes(filters.category)
+      ? categoryToSlug(filters.category)
+      : filters.category;
+    params.set("category", slug);
+  }
   if (filters.skills.length) params.set("skills", filters.skills.join(","));
   if (filters.status.length) params.set("status", filters.status.join(","));
   if (filters.minBudget) params.set("min", filters.minBudget);
