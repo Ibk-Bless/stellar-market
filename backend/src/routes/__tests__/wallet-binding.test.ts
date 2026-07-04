@@ -83,8 +83,16 @@ jest.mock("@prisma/client", () => ({
 }));
 
 // Redis mock
+let challengeNonce: string | null = null;
+
 const mockRedis = {
-  get: jest.fn(),
+  // The auth middleware's token-version cache (issue #787) shares this same
+  // Redis client. Serve it a fixed cached version so it never falls through
+  // to a Prisma lookup, which would otherwise consume the calls the tests
+  // below queue up for the wallet-binding logic itself.
+  get: jest.fn((key: string) =>
+    Promise.resolve(key.startsWith("auth:tokenVersion:") ? "0" : challengeNonce),
+  ),
   set: jest.fn().mockResolvedValue("OK"),
   del: jest.fn().mockResolvedValue(1),
 };
@@ -93,6 +101,8 @@ jest.mock("../../lib/redis", () => ({
   __esModule: true,
   default: {
     getInstance: jest.fn(() => mockRedis),
+    isRedisConnected: jest.fn(() => true),
+    connect: jest.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -185,7 +195,7 @@ describe("POST /auth/wallet/verify", () => {
   });
 
   it("binds the wallet and returns a token when signature is valid", async () => {
-    mockRedis.get.mockResolvedValue(challenge);
+    challengeNonce = challenge;
     mockPrismaDb.user.findUnique
       .mockResolvedValueOnce({ ...mockUser, role: "FREELANCER", emailVerified: true }) // auth check
       .mockResolvedValueOnce(null); // no existing owner
@@ -213,7 +223,7 @@ describe("POST /auth/wallet/verify", () => {
   });
 
   it("returns CHALLENGE_EXPIRED when no nonce is in Redis", async () => {
-    mockRedis.get.mockResolvedValue(null);
+    challengeNonce = null;
 
     const sig = signChallenge(challenge);
     const res = await request(app)
@@ -227,7 +237,7 @@ describe("POST /auth/wallet/verify", () => {
   });
 
   it("returns INVALID_SIGNATURE for a valid address but wrong signature", async () => {
-    mockRedis.get.mockResolvedValue(challenge);
+    challengeNonce = challenge;
 
     const wrongKeypair = Keypair.random();
     const wrongSig = wrongKeypair
@@ -245,7 +255,7 @@ describe("POST /auth/wallet/verify", () => {
   });
 
   it("returns INVALID_SIGNATURE when one byte of the signature is flipped", async () => {
-    mockRedis.get.mockResolvedValue(challenge);
+    challengeNonce = challenge;
 
     const sigBytes = keypair.sign(Buffer.from(challenge, "utf8"));
     // Flip the first byte
@@ -262,7 +272,7 @@ describe("POST /auth/wallet/verify", () => {
   });
 
   it("returns 409 when the address is already owned by another account", async () => {
-    mockRedis.get.mockResolvedValue(challenge);
+    challengeNonce = challenge;
     mockPrismaDb.user.findUnique
       .mockResolvedValueOnce({ ...mockUser, role: "FREELANCER", emailVerified: true }) // auth
       .mockResolvedValueOnce({ id: "other-user", walletAddress: address }); // existing owner
@@ -278,7 +288,7 @@ describe("POST /auth/wallet/verify", () => {
   });
 
   it("returns 400 when address field is missing", async () => {
-    mockRedis.get.mockResolvedValue(challenge);
+    challengeNonce = challenge;
 
     const sig = signChallenge(challenge);
     const res = await request(app)

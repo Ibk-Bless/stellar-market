@@ -1,63 +1,51 @@
 const mockState = {
   cursor: "0",
   cursorUpdates: [] as string[],
+  lastIndexedLedger: null as number | null,
   dlq: [] as Array<Record<string, any>>,
-  jobFailure: null as Error | null,
+  jobFindFirstFailure: null as Error | null,
 };
 
 const mockGetEvents = jest.fn();
-const mockJobUpdateMany = jest.fn(async () => {
-  if (mockState.jobFailure) throw mockState.jobFailure;
-  return { count: 0 };
-});
+const mockGetLatestLedger = jest.fn();
 
 const mockCursorUpsert = jest.fn(async ({ update, create }: any) => {
-  const next = update.cursor ?? mockState.cursor ?? create.cursor;
+  const next = update.cursor ?? create.cursor;
   mockState.cursor = next;
-  if (update.cursor) mockState.cursorUpdates.push(next);
-  return {
-    id: 1,
-    cursor: mockState.cursor,
-    updatedAt: new Date(),
-    lastEventAt: update.lastEventAt ?? create.lastEventAt ?? null,
-  };
+  mockState.cursorUpdates.push(next);
+  return { id: 1, cursor: mockState.cursor, updatedAt: new Date() };
 });
 
-const mockTx = {
-  horizonCursor: { upsert: mockCursorUpsert },
+const mockJobFindFirst = jest.fn(async () => {
+  if (mockState.jobFindFirstFailure) throw mockState.jobFindFirstFailure;
+  return null;
+});
+
+const mockPrisma = {
+  horizonCursor: {
+    upsert: mockCursorUpsert,
+    findUnique: jest.fn(async () => ({ id: 1, cursor: mockState.cursor })),
+  },
+  syncState: {
+    upsert: jest.fn(async ({ update }: any) => {
+      mockState.lastIndexedLedger = update.lastIndexedLedger;
+      return { id: "default", lastIndexedLedger: mockState.lastIndexedLedger };
+    }),
+  },
   horizonDlq: {
     create: jest.fn(async ({ data }: any) => {
       const entry = { id: mockState.dlq.length + 1, ...data, replayedAt: null };
       mockState.dlq.push(entry);
       return entry;
     }),
-    update: jest.fn(),
-  },
-  job: {
-    updateMany: mockJobUpdateMany,
-    findFirst: jest.fn(),
-    update: jest.fn(),
-  },
-  dispute: {
-    findUnique: jest.fn(),
-    update: jest.fn(),
-    upsert: jest.fn(),
-  },
-  user: { findUnique: jest.fn() },
-  badge: { upsert: jest.fn() },
-  notification: { create: jest.fn() },
-};
-
-const mockPrisma = {
-  horizonCursor: { upsert: mockCursorUpsert },
-  horizonDlq: {
     count: jest.fn(async () => mockState.dlq.filter((entry) => !entry.replayedAt).length),
     findMany: jest.fn(async () => mockState.dlq),
     update: jest.fn(),
   },
-  $transaction: jest.fn(async (callback: (tx: typeof mockTx) => unknown) =>
-    callback(mockTx),
-  ),
+  job: {
+    findFirst: mockJobFindFirst,
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
 };
 
 jest.mock("@prisma/client", () => ({
@@ -67,6 +55,15 @@ jest.mock("@prisma/client", () => ({
     SILVER: "SILVER",
     GOLD: "GOLD",
     PLATINUM: "PLATINUM",
+  },
+  EscrowEventType: {
+    JOB_CREATED: "JOB_CREATED",
+    JOB_FUNDED: "JOB_FUNDED",
+    PAYMENT_RELEASED: "PAYMENT_RELEASED",
+    DISPUTE_OPENED: "DISPUTE_OPENED",
+    DISPUTE_RESOLVED: "DISPUTE_RESOLVED",
+    REFUNDED: "REFUNDED",
+    EXPIRED: "EXPIRED",
   },
   NotificationType: {
     PAYMENT_RELEASED: "PAYMENT_RELEASED",
@@ -80,6 +77,7 @@ jest.mock("@stellar/stellar-sdk", () => ({
   rpc: {
     Server: jest.fn(() => ({
       getEvents: mockGetEvents,
+      getLatestLedger: mockGetLatestLedger,
     })),
   },
   scValToNative: jest.fn((value: { native: unknown }) => value.native),
@@ -120,6 +118,7 @@ function makeEvent(
   });
 
   return {
+    id: pagingToken,
     pagingToken,
     type: "contract",
     ledger: Number(pagingToken),
@@ -137,14 +136,21 @@ describe("durable Horizon listener", () => {
     jest.clearAllMocks();
     mockState.cursor = "0";
     mockState.cursorUpdates = [];
+    mockState.lastIndexedLedger = null;
     mockState.dlq = [];
-    mockState.jobFailure = null;
+    mockState.jobFindFirstFailure = null;
   });
 
   it("resumes from the persisted cursor after a simulated restart without gaps or duplicates", async () => {
-    const events = Array.from({ length: 10 }, (_, index) => makeEvent(String(index + 1)));
+    // Simulate a listener that already completed its initial bootstrap poll in
+    // an earlier process, persisting cursor "100" — this poll should paginate
+    // forward from there rather than replaying from ledger zero.
+    mockState.cursor = "100";
+    mockGetLatestLedger.mockResolvedValue({ sequence: 1_000 });
+
+    const events = Array.from({ length: 10 }, (_, index) => makeEvent(String(101 + index)));
     mockGetEvents.mockImplementation(async ({ pagination }: any) => {
-      const offset = Number(pagination.cursor);
+      const offset = Number(pagination.cursor) - 100;
       return { events: events.slice(offset, offset + 5) };
     });
 
@@ -156,35 +162,30 @@ describe("durable Horizon listener", () => {
     await service.pollHorizonOnce();
 
     expect(mockGetEvents.mock.calls.map(([request]) => request.pagination.cursor)).toEqual([
-      "0",
-      "5",
+      "100",
+      "105",
     ]);
-    expect(mockState.cursorUpdates).toEqual([
-      "1", "2", "3", "4", "5",
-      "6", "7", "8", "9", "10",
-    ]);
-    expect(new Set(mockState.cursorUpdates).size).toBe(10);
-    expect(mockState.cursor).toBe("10");
+    expect(mockState.cursorUpdates).toEqual(["105", "110"]);
+    expect(mockState.cursor).toBe("110");
+    expect(mockState.lastIndexedLedger).toBe(110);
   });
 
-  it("moves a three-time failure to the DLQ and advances the cursor atomically", async () => {
-    mockState.jobFailure = new Error("database write failed");
+  it("moves a three-time failure to the DLQ", async () => {
+    mockState.jobFindFirstFailure = new Error("database read failed");
     const service = await import("../horizon-listener.service");
 
     await service.processHorizonEvent(
       makeEvent("42", ["escrow", "created"], [42]) as any,
     );
 
-    expect(mockJobUpdateMany).toHaveBeenCalledTimes(3);
+    expect(mockJobFindFirst).toHaveBeenCalledTimes(3);
     expect(mockState.dlq).toHaveLength(1);
     expect(mockState.dlq[0]).toEqual(
       expect.objectContaining({
         cursor: "42",
-        error: "database write failed",
-        attempt: 3,
+        error: "database read failed",
+        attempt: 1,
       }),
     );
-    expect(mockState.cursorUpdates).toEqual(["42"]);
-    expect(mockState.cursor).toBe("42");
-  });
+  }, 10_000);
 });

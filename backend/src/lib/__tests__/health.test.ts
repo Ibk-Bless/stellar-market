@@ -19,6 +19,16 @@ jest.mock("../../config", () => ({
     version: "1.0.0",
     stellar: {
       rpcUrl: "https://soroban-testnet.stellar.org",
+      escrowContractId: "",
+      disputeContractId: "",
+      reputationContractId: "",
+    },
+    smtp: {
+      host: "smtp.test",
+      port: 587,
+      user: "",
+      pass: "",
+      from: "noreply@test.io",
     },
   },
 }));
@@ -49,18 +59,15 @@ describe("getHealthStatus", () => {
     expect(result.status).toBe("ok");
     expect(result.version).toBe("1.0.0");
     expect(result.uptime).toBeGreaterThanOrEqual(0);
-    expect(result.checks).toEqual({
-      database: "ok",
-      redis: "ok",
-      sorobanRpc: "ok",
-    });
     expect(result).toEqual({
       status: "ok",
       service: "stellarmarket-api",
+      version: "1.0.0",
       uptime: expect.any(Number),
       checks: {
         database: "ok",
         redis: "ok",
+        sorobanRpc: "ok",
         horizonListener: "connected",
       },
     });

@@ -683,11 +683,6 @@ export async function pollHorizonOnce(): Promise<void> {
     await setCursor(String(maxEventLedger));
     await setLastIndexedLedger(maxEventLedger); // Keep legacy sync for badges
   }
-  await prisma.horizonCursor.upsert({
-    where: { id: CURSOR_ID },
-    update: { cursor },
-    create: { id: CURSOR_ID, cursor },
-  });
 }
 
 // ─── admin operations ─────────────────────────────────────────────────────────
