@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Star,
@@ -29,6 +29,7 @@ import { ContractService, ReputationResult, DEFAULT_BADGE_TIERS } from "@/servic
 import ShareMenu from "@/components/ShareMenu";
 import ProfileSkeleton from "@/components/skeletons/ProfileSkeleton";
 import WalletAddress from "@/components/WalletAddress";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import InviteToJobModal from "@/components/InviteToJobModal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
@@ -51,6 +52,8 @@ export default function ProfileClient() {
 
   const [portfolioItems, setPortfolioItems] = useState<PortfolioItem[]>([]);
   const [lightboxItem, setLightboxItem] = useState<PortfolioItem | null>(null);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(lightboxRef, { open: !!lightboxItem, onClose: () => setLightboxItem(null) });
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
 
   useEffect(() => {
@@ -615,6 +618,7 @@ export default function ProfileClient() {
           onClick={() => setLightboxItem(null)}
         >
           <div
+            ref={lightboxRef}
             className="relative max-w-4xl w-full max-h-[90vh] bg-theme-card rounded-2xl overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >

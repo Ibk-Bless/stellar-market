@@ -1,9 +1,16 @@
 import jwt from "jsonwebtoken";
 import { authenticate, AuthRequest } from "../auth";
+import { getCurrentTokenVersion } from "../../lib/token-version";
 
 jest.mock("jsonwebtoken", () => ({
   verify: jest.fn(),
 }));
+
+jest.mock("../../lib/token-version", () => ({
+  getCurrentTokenVersion: jest.fn(),
+}));
+
+const getCurrentTokenVersionMock = getCurrentTokenVersion as jest.Mock;
 
 jest.mock("@prisma/client", () => {
   const mockPrisma = {
@@ -34,6 +41,8 @@ describe("authenticate middleware", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Default: token version matches (no invalidation) so existing assertions hold.
+    getCurrentTokenVersionMock.mockResolvedValue(0);
   });
 
   it("sets req.userId and req.userRole for valid token", async () => {
@@ -103,5 +112,47 @@ describe("authenticate middleware", () => {
       code: "ACCOUNT_DELETED",
     });
     expect(next).not.toHaveBeenCalled();
+  });
+
+  // Issue #787 — JWTs are invalidated when the password changes (tokenVersion bump).
+  it("rejects a token whose tokenVersion is older than the user's current version", async () => {
+    const req = {
+      headers: { authorization: "Bearer stale.token" },
+      path: "/dashboard",
+    } as AuthRequest;
+
+    // Token was signed at version 0; the password change bumped it to 1.
+    (jwt.verify as jest.Mock).mockReturnValue({ userId: "user-123", tokenVersion: 0 });
+    getCurrentTokenVersionMock.mockResolvedValue(1);
+
+    await authenticate(req, res, next);
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith({
+      error: "Token has been invalidated. Please log in again.",
+      code: "TokenInvalidated",
+    });
+    expect(next).not.toHaveBeenCalled();
+    // Short-circuits before the user lookup.
+    expect(prismaMock.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("accepts a token whose tokenVersion matches the user's current version", async () => {
+    const req = {
+      headers: { authorization: "Bearer fresh.token" },
+      path: "/dashboard",
+    } as AuthRequest;
+
+    // Token issued after the password change carries the new version.
+    (jwt.verify as jest.Mock).mockReturnValue({ userId: "user-123", tokenVersion: 1 });
+    getCurrentTokenVersionMock.mockResolvedValue(1);
+    prismaMock.user.findUnique.mockResolvedValue({ role: UserRole.CLIENT, emailVerified: true });
+
+    await authenticate(req, res, next);
+
+    expect(req.userId).toBe("user-123");
+    expect(req.userRole).toBe(UserRole.CLIENT);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(status).not.toHaveBeenCalled();
   });
 });

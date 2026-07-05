@@ -12,8 +12,9 @@ import {
   Star,
   User,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ShareMenu from "@/components/ShareMenu";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/v1";
 const BASE_URL = API_URL.replace(/\/api\/?$/, "");
@@ -74,6 +75,8 @@ function StarRow({ rating }: { rating: number }) {
 
 export default function PublicProfileClient({ profile }: { profile: PublicProfile }) {
   const [lightbox, setLightbox] = useState<PortfolioItem | null>(null);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(lightboxRef, { open: !!lightbox, onClose: () => setLightbox(null) });
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -341,6 +344,7 @@ export default function PublicProfileClient({ profile }: { profile: PublicProfil
           aria-label={`Portfolio item: ${lightbox.title}`}
         >
           <div
+            ref={lightboxRef}
             className="relative max-w-4xl w-full max-h-[90vh] bg-theme-card rounded-2xl overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >

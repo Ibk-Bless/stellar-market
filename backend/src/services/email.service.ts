@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import jwt from "jsonwebtoken";
 import { config } from "../config";
 import { logger } from "../lib/logger";
 import { renderEmailTemplate } from "../utils/emailTemplateRenderer";
@@ -14,6 +15,19 @@ const transporter = nodemailer.createTransport({
 });
 
 export class EmailService {
+  static generateUnsubscribeToken(userId: string): string {
+    return jwt.sign(
+      { userId, type: "unsubscribe" },
+      config.jwtSecret,
+      { expiresIn: "90d" },
+    );
+  }
+
+  static buildUnsubscribeUrl(userId: string): string {
+    const token = this.generateUnsubscribeToken(userId);
+    return `${config.frontendUrl}/api/v1/unsubscribe?token=${token}`;
+  }
+
   static async sendVerificationEmail(to: string, token: string): Promise<void> {
     const verifyUrl = `${config.frontendUrl}/auth/verify-email?token=${token}`;
     
@@ -73,8 +87,9 @@ export class EmailService {
     message: string;
     outcome?: string;
     actionUrl?: string;
+    unsubscribeUrl?: string;
   }): Promise<void> {
-    const { to, event, title, message, outcome, actionUrl } = params;
+    const { to, event, title, message, outcome, actionUrl, unsubscribeUrl } = params;
 
     let bodyHtml: string;
     let preheader: string;
@@ -124,6 +139,7 @@ export class EmailService {
       bodyHtml,
       actionUrl,
       actionLabel,
+      unsubscribeUrl,
     });
 
     const subjectPrefix = "StellarMarket";

@@ -87,6 +87,10 @@ pub enum EscrowError {
     SlippageExceeded = 45,
     /// A replayed nonce was detected within the TTL window.
     NonceReplay = 46,
+    /// A milestone deadline is not strictly after the previous milestone's deadline.
+    MilestoneDeadlinesNotOrdered = 47,
+    /// A milestone deadline is in the past or equal to the current ledger timestamp.
+    MilestoneDeadlineInPast = 49,
 }
 
 /// Privileged actions that can be proposed and approved through the multi-sig flow.
@@ -268,8 +272,8 @@ pub struct Job {
     pub expiry_ledger: u32,
 }
 
-const MAX_FEE_BPS: u32 = 1000; // 10%
-const MAX_MILESTONES: u32 = 20;
+const MAX_FEE_BPS: u32 = 500; // 5%
+const MAX_MILESTONES: u32 = 50;
 
 /// A formal proposal to revise the milestones and total budget of an active job.
 #[contracttype]
@@ -422,6 +426,17 @@ pub struct TtlExtendedEvent {
     pub new_expiry_ledger: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Paused {
+    pub paused_by: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Unpaused {
+    pub unpaused_by: Address,
+}
 
 
 fn bump_escrow_ttl(env: &Env, job_id: u64) {
@@ -998,15 +1013,19 @@ impl EscrowContract {
             AdminAction::Pause => {
                 env.storage().instance().set(&DataKey::Paused, &true);
                 env.events().publish(
-                    (symbol_short!("paused"),),
-                    (env.current_contract_address(), env.ledger().timestamp()),
+                    (symbol_short!("escrow"), symbol_short!("paused")),
+                    Paused {
+                        paused_by: proposal.proposer.clone()
+                    },
                 );
             }
             AdminAction::Unpause => {
                 env.storage().instance().set(&DataKey::Paused, &false);
                 env.events().publish(
-                    (symbol_short!("unpaused"),),
-                    (env.current_contract_address(), env.ledger().timestamp()),
+                    (symbol_short!("escrow"), symbol_short!("unpaused")),
+                    Unpaused {
+                        unpaused_by: proposal.proposer.clone()
+                    },
                 );
             }
             AdminAction::SetFeeBps(fee) => {
@@ -1210,6 +1229,7 @@ impl EscrowContract {
 
         let mut total: i128 = 0;
         let mut milestone_vec: Vec<Milestone> = Vec::new(&env);
+        let mut prev_deadline: u64 = 0;
 
         for (i, m) in milestones.iter().enumerate() {
             let (desc, amount, deadline) = m;
@@ -1217,11 +1237,15 @@ impl EscrowContract {
                 return Err(EscrowError::InvalidMilestone);
             }
             if deadline <= env.ledger().timestamp() {
-                return Err(EscrowError::InvalidDeadline);
+                return Err(EscrowError::MilestoneDeadlineInPast);
             }
             if deadline > job_deadline {
                 return Err(EscrowError::InvalidDeadline);
             }
+            if i > 0 && deadline <= prev_deadline {
+                return Err(EscrowError::MilestoneDeadlinesNotOrdered);
+            }
+            prev_deadline = deadline;
             total += amount;
             if total > i128::MAX / 2 {
                 return Err(EscrowError::InvalidMilestone);
@@ -1701,39 +1725,6 @@ impl EscrowContract {
             return Err(EscrowError::InvalidStatus);
         }
 
-        // Release payment for this milestone
-        let token_client = token::Client::new(&env, &job.token);
-
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("FEE"))
-            .unwrap_or(0);
-        let treasury: Address = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("TRE"))
-            .unwrap_or(env.current_contract_address()); // Fallback to contract itself if not set, though it should be
-
-        let fee_amount = (milestone.amount * fee_bps as i128) / 10_000;
-        let freelancer_amount = milestone.amount - fee_amount;
-
-        if fee_amount > 0 {
-            token_client.transfer(&env.current_contract_address(), &treasury, &fee_amount);
-
-            // Emit fee collected event
-            env.events().publish(
-                (symbol_short!("escrow"), symbol_short!("fee")),
-                (job_id, milestone_id, fee_amount, treasury.clone()),
-            );
-        }
-
-        token_client.transfer(
-            &env.current_contract_address(),
-            &job.freelancer,
-            &freelancer_amount,
-        );
-
         let updated = Milestone {
             id: milestone.id,
             description: milestone.description.clone(),
@@ -1744,12 +1735,9 @@ impl EscrowContract {
         milestones.set(milestone_id, updated);
         job.milestones = milestones.clone();
 
-        // Check if all milestones are approved
-        let all_approved = milestones
-            .iter()
-            .all(|m| m.status == MilestoneStatus::Approved);
-        if all_approved {
-            job.status = JobStatus::Completed;
+        // Keep the job in InProgress; complete_job will finalize payment and transition to Completed.
+        if job.status != JobStatus::InProgress {
+            job.status = JobStatus::InProgress;
         }
 
         env.storage().persistent().set(&get_job_key(job_id), &job);
@@ -1775,14 +1763,6 @@ impl EscrowContract {
                 milestone.amount,
             ),
         );
-
-        // Emit PaymentReleased event when job reaches Completed status
-        if all_approved {
-            env.events().publish(
-                (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
-                (job_id, job.freelancer.clone(), freelancer_amount),
-            );
-        }
 
         Ok(())
     }
@@ -1856,49 +1836,11 @@ impl EscrowContract {
             }
         }
 
-        // Transfer all payments in a single transaction
-        if total_released > 0 {
-            let token_client = token::Client::new(&env, &job.token);
-
-            let fee_bps: u32 = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("FEE"))
-                .unwrap_or(0);
-            let treasury: Address = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("TRE"))
-                .unwrap_or(env.current_contract_address());
-
-            let fee_amount = (total_released * fee_bps as i128) / 10_000;
-            let freelancer_amount = total_released - fee_amount;
-
-            if fee_amount > 0 {
-                token_client.transfer(&env.current_contract_address(), &treasury, &fee_amount);
-
-                // Emit fee collected event for the batch
-                env.events().publish(
-                    (symbol_short!("escrow"), symbol_short!("fee_batch")),
-                    (job_id, fee_amount, treasury),
-                );
-            }
-
-            token_client.transfer(
-                &env.current_contract_address(),
-                &job.freelancer,
-                &freelancer_amount,
-            );
-        }
-
         job.milestones = milestones.clone();
 
-        // Check if all milestones are approved
-        let all_approved = milestones
-            .iter()
-            .all(|m| m.status == MilestoneStatus::Approved);
-        if all_approved {
-            job.status = JobStatus::Completed;
+        // Keep the job in InProgress; complete_job will finalize payment and transition to Completed.
+        if job.status != JobStatus::InProgress {
+            job.status = JobStatus::InProgress;
         }
 
         env.storage().persistent().set(&get_job_key(job_id), &job);
@@ -1915,14 +1857,6 @@ impl EscrowContract {
                 job.freelancer.clone(),
             ),
         );
-
-        // Emit PaymentReleased event when job reaches Completed status
-        if all_approved {
-            env.events().publish(
-                (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
-                (job_id, job.freelancer.clone(), total_released),
-            );
-        }
 
         Ok(total_released)
     }
@@ -2084,11 +2018,9 @@ impl EscrowContract {
         milestones.set(milestone_id, updated);
         job.milestones = milestones.clone();
 
-        let all_approved = milestones
-            .iter()
-            .all(|m| m.status == MilestoneStatus::Approved);
-        if all_approved {
-            job.status = JobStatus::Completed;
+        // Keep the job in InProgress; complete_job will finalize payment and transition to Completed.
+        if job.status != JobStatus::InProgress {
+            job.status = JobStatus::InProgress;
         }
 
         env.storage().persistent().set(&get_job_key(job_id), &job);
@@ -2101,13 +2033,6 @@ impl EscrowContract {
             (symbol_short!("escrow"), Symbol::new(&env, "inact_final")),
             (job_id, milestone_id, caller),
         );
-
-        if all_approved {
-            env.events().publish(
-                (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
-                (job_id, job.freelancer, freelancer_amount),
-            );
-        }
 
         Ok(())
     }
@@ -2168,35 +2093,13 @@ impl EscrowContract {
             return Err(EscrowError::InvalidPartialAmount);
         }
 
-        // Compute fee and net freelancer amount.
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("FEE"))
-            .unwrap_or(0);
-        let treasury: Address = env
-            .storage()
-            .instance()
-            .get(&symbol_short!("TRE"))
-            .unwrap_or(env.current_contract_address());
-
-        let fee_amount = (amount * fee_bps as i128) / 10_000;
-        let freelancer_amount = amount - fee_amount;
-
+        // Release partial payment to freelancer (no fee deducted per-milestone;
+        // the protocol fee is taken from remaining escrow on complete_job).
         let token_client = token::Client::new(&env, &job.token);
-
-        if fee_amount > 0 {
-            token_client.transfer(&env.current_contract_address(), &treasury, &fee_amount);
-            env.events().publish(
-                (symbol_short!("escrow"), symbol_short!("fee")),
-                (job_id, milestone_index, fee_amount, treasury.clone()),
-            );
-        }
-
         token_client.transfer(
             &env.current_contract_address(),
             &job.freelancer,
-            &freelancer_amount,
+            &amount,
         );
 
         // Deduct paid amount from milestone; transition status accordingly.
@@ -2217,12 +2120,9 @@ impl EscrowContract {
         milestones.set(milestone_index, updated);
         job.milestones = milestones.clone();
 
-        // Check if all milestones are now fully paid.
-        let all_approved = milestones
-            .iter()
-            .all(|m| m.status == MilestoneStatus::Approved);
-        if all_approved {
-            job.status = JobStatus::Completed;
+        // Keep the job in InProgress; complete_job will finalize payment and transition to Completed.
+        if job.status != JobStatus::InProgress {
+            job.status = JobStatus::InProgress;
         }
 
         env.storage().persistent().set(&get_job_key(job_id), &job);
@@ -2233,15 +2133,99 @@ impl EscrowContract {
         let freelancer = job.freelancer.clone();
         env.events().publish(
             (symbol_short!("escrow"), Symbol::new(&env, "partial_pmt")),
-            (job_id, milestone_index, amount, client, freelancer.clone()),
+            (job_id, milestone_index, amount, client, freelancer),
         );
 
-        if all_approved {
-            env.events().publish(
-                (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
-                (job_id, freelancer, amount),
+        Ok(())
+    }
+
+    /// Finalize a job when all milestones are approved, deducting the protocol fee
+    /// and distributing remaining escrow to the freelancer.
+    ///
+    /// # Authorization
+    /// Either the client or the freelancer may call this function.
+    ///
+    /// # Errors
+    /// * `JobNotFound`   — if the job does not exist
+    /// * `Unauthorized`  — if caller is neither client nor freelancer
+    /// * `InvalidStatus` — if job is not `InProgress` or milestones are not all `Approved`
+    /// * `ContractPaused` — if the contract is paused
+    pub fn complete_job(
+        env: Env,
+        job_id: u64,
+        caller: Address,
+    ) -> Result<(), EscrowError> {
+        caller.require_auth();
+        require_not_paused(&env)?;
+
+        let mut job: Job = env
+            .storage()
+            .persistent()
+            .get(&get_job_key(job_id))
+            .ok_or(EscrowError::JobNotFound)?;
+        bump_job_ttl(&env, job_id);
+
+        if caller != job.client && caller != job.freelancer {
+            return Err(EscrowError::Unauthorized);
+        }
+
+        if job.status != JobStatus::InProgress {
+            return Err(EscrowError::InvalidStatus);
+        }
+
+        let all_approved = job
+            .milestones
+            .iter()
+            .all(|m| m.status == MilestoneStatus::Approved);
+        if !all_approved {
+            return Err(EscrowError::InvalidStatus);
+        }
+
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("FEE"))
+            .unwrap_or(0);
+        let fee_recipient: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("TRE"))
+            .unwrap_or(env.current_contract_address());
+
+        let fee_amount = (job.total_amount * fee_bps as i128) / 10_000;
+        let freelancer_amount = job.total_amount - fee_amount;
+
+        let token_client = token::Client::new(&env, &job.token);
+
+        if fee_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &fee_recipient,
+                &fee_amount,
             );
         }
+
+        if freelancer_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &job.freelancer,
+                &freelancer_amount,
+            );
+        }
+
+        job.status = JobStatus::Completed;
+        env.storage().persistent().set(&get_job_key(job_id), &job);
+        bump_job_ttl(&env, job_id);
+
+        env.events().publish(
+            (symbol_short!("escrow"), Symbol::new(&env, "fee_taken")),
+            (job_id, fee_amount, fee_recipient),
+        );
+
+        env.events().publish(
+            (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
+            (job_id, job.freelancer, freelancer_amount),
+        );
 
         Ok(())
     }
@@ -2452,6 +2436,7 @@ impl EscrowContract {
         }
 
         // Refund the remaining escrowed amount (total minus already-approved milestones).
+        // Pay already-approved milestones to the freelancer, since payment only happens in complete_job.
         let approved_amount: i128 = job
             .milestones
             .iter()
@@ -2459,8 +2444,11 @@ impl EscrowContract {
             .map(|m| m.amount)
             .sum();
         let refund = job.total_amount - approved_amount;
+        let token_client = token::Client::new(&env, &job.token);
+        if approved_amount > 0 {
+            token_client.transfer(&env.current_contract_address(), &job.freelancer, &approved_amount);
+        }
         if refund > 0 {
-            let token_client = token::Client::new(&env, &job.token);
             token_client.transfer(&env.current_contract_address(), &client, &refund);
         }
 
@@ -2524,12 +2512,31 @@ impl EscrowContract {
             .sum();
 
         let refund = job.total_amount - approved_amount;
+
+        // If there's nothing to distribute (all approved, nothing to refund), still
+        // pay the approved amount to the freelancer before returning.
+        let token_client = token::Client::new(&env, &job.token);
+
+        if approved_amount > 0 {
+            token_client.transfer(&env.current_contract_address(), &job.freelancer, &approved_amount);
+        }
+
         if refund <= 0 {
-            return Err(EscrowError::NoRefundDue);
+            if approved_amount == 0 {
+                return Err(EscrowError::NoRefundDue);
+            }
+            // approved_amount paid above — no refund due to client, just update status
+            job.status = JobStatus::Cancelled;
+            env.storage().persistent().set(&get_job_key(job_id), &job);
+            bump_job_ttl(&env, job_id);
+            env.events().publish(
+                (symbol_short!("escrow"), symbol_short!("refund")),
+                (job_id, 0_i128, client, job.freelancer),
+            );
+            return Ok(());
         }
 
         // Transfer refund to client
-        let token_client = token::Client::new(&env, &job.token);
         token_client.transfer(&env.current_contract_address(), &client, &refund);
 
         job.status = JobStatus::Cancelled;
@@ -3198,6 +3205,8 @@ impl EscrowContract {
         require_state_expirable(&job)?;
 
         // Refund remaining escrowed balance (total minus already-approved milestones).
+        // Also pay the approved milestone amounts to the freelancer, since payment
+        // only happens during complete_job.
         let approved_amount: i128 = job
             .milestones
             .iter()
@@ -3206,13 +3215,22 @@ impl EscrowContract {
             .sum();
         let refund = job.total_amount - approved_amount;
 
+        let token_client = token::Client::new(&env, &job.token);
+
+        if approved_amount > 0
+            && (job.status == JobStatus::Funded
+                || job.status == JobStatus::InProgress
+                || job.status == JobStatus::Disputed)
+        {
+            token_client.transfer(&env.current_contract_address(), &job.freelancer, &approved_amount);
+        }
+
         // Only transfer if funds are actually held in escrow (job was funded).
         if refund > 0
             && (job.status == JobStatus::Funded
                 || job.status == JobStatus::InProgress
                 || job.status == JobStatus::Disputed)
         {
-            let token_client = token::Client::new(&env, &job.token);
             token_client.transfer(&env.current_contract_address(), &job.client, &refund);
         }
 

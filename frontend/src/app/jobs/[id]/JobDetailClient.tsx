@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useQueryClient, useInfiniteQuery } from "@tanstack/react-query";
 import {
@@ -23,6 +23,7 @@ import axios from "axios";
 import { useWallet } from "@/context/WalletContext";
 import { useAuth } from "@/context/AuthContext";
 import { PAYMENT_TOKENS, TOKEN_EXCHANGE_RATES } from "@/constants/jobs";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import StatusBadge from "@/components/StatusBadge";
 import ApplyModal from "@/components/ApplyModal";
 import RaiseDisputeModal from "@/components/RaiseDisputeModal";
@@ -217,6 +218,8 @@ export default function JobDetailClient() {
   const [disputeModalOpen, setDisputeModalOpen] = useState(false);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [withdrawConfirmOpen, setWithdrawConfirmOpen] = useState(false);
+  const withdrawConfirmRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(withdrawConfirmRef, { open: withdrawConfirmOpen, onClose: () => setWithdrawConfirmOpen(false) });
   const [withdrawing, setWithdrawing] = useState(false);
   const [actioningApp, setActioningApp] = useState<string | null>(null);
   const [proposeRevisionOpen, setProposeRevisionOpen] = useState(false);
@@ -1535,7 +1538,7 @@ export default function JobDetailClient() {
       {/* Withdraw Application confirmation dialog */}
       {withdrawConfirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-theme-card border border-theme-border rounded-xl shadow-2xl w-full max-w-md p-6">
+          <div ref={withdrawConfirmRef} className="bg-theme-card border border-theme-border rounded-xl shadow-2xl w-full max-w-md p-6">
             <h2 className="text-lg font-semibold text-theme-heading mb-2">
               Withdraw Application?
             </h2>

@@ -145,6 +145,10 @@ model User {
   suspendedAt            DateTime?
   deletedAt              DateTime?
   isSuspiciousReporter   Boolean   @default(false)
+  // Incremented on every password change so previously-issued JWTs (which embed
+  // the value at sign time) are rejected by the auth middleware on mismatch.
+  // Invalidates stolen tokens immediately after a password change (issue #787).
+  tokenVersion           Int       @default(0)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
   availability           Boolean   @default(true)
@@ -198,6 +202,7 @@ model NotificationPreference {
   emailMilestoneApproved Boolean  @default(true)
   emailPaymentReleased   Boolean  @default(true)
   emailApplicationAccepted Boolean @default(true)
+  marketingEmails        Boolean  @default(true)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -236,6 +241,8 @@ model Job {
   savedBy      SavedJob[]    @relation("SavedByFreelancers")
   deadlineExtensionRequests DeadlineExtensionRequest[] @relation("DeadlineExtensions")
   escrowEvents EscrowEvent[]
+
+  contractPaused  Boolean  @default(false)
 
   @@index([deletedAt])
 }
@@ -568,6 +575,28 @@ model SyncState {
   updatedAt         DateTime @updatedAt
 }
 
+model HorizonCursor {
+  id          Int       @id @default(1)
+  cursor      String
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+  lastEventAt DateTime? @map("last_event_at")
+
+  @@map("horizon_cursor")
+}
+
+model HorizonDlq {
+  id         Int       @id @default(autoincrement())
+  cursor     String
+  payload    Json
+  error      String
+  attempt    Int       @default(1)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  replayedAt DateTime? @map("replayed_at")
+
+  @@index([replayedAt, cursor])
+  @@map("horizon_dlq")
+}
+
 model Badge {
   id            String    @id @default(cuid())
   userId        String
@@ -686,28 +715,6 @@ model PushSubscription {
   user User @relation("UserPushSubscriptions", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
-}
-
-model HorizonCursor {
-  id        Int      @id @default(1)
-  cursor    String
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@map("horizon_cursor")
-}
-
-model HorizonDlq {
-  id         Int       @id @default(autoincrement())
-  cursor     String
-  payload    Json
-  error      String
-  attempt    Int       @default(1)
-  createdAt  DateTime  @default(now()) @map("created_at")
-  replayedAt DateTime? @map("replayed_at")
-
-  @@index([replayedAt])
-  @@index([cursor])
-  @@map("horizon_dlq")
 }
 
 model Skill {

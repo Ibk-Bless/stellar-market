@@ -1,5 +1,12 @@
-import { rpc, scValToNative } from "@stellar/stellar-sdk";
-import { PrismaClient, BadgeTier, EscrowEventType } from "@prisma/client";
+import { rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import {
+  PrismaClient,
+  BadgeTier,
+  EscrowEventType,
+  Prisma,
+  Notification,
+  NotificationType,
+} from "@prisma/client";
 import { config } from "../config";
 import { NotificationService } from "./notification.service";
 import { logger } from "../lib/logger";
@@ -16,7 +23,9 @@ const server = new rpc.Server(config.stellar.rpcUrl);
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_EVENTS_PER_POLL = 200;
-const SYNC_STATE_ID = "default";
+const CURSOR_ID = 1;
+const MAX_PROCESSING_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 250;
 
 // ─── Reconnect backoff (independent of the circuit breaker's open/half-open
 // gating below — this controls how soon we *retry* after a failed poll) ──────
@@ -122,6 +131,16 @@ async function setCursor(cursor: string): Promise<void> {
   });
 }
 
+const SYNC_STATE_ID = "default";
+
+async function setLastIndexedLedger(ledger: number): Promise<void> {
+  await prisma.syncState.upsert({
+    where: { id: SYNC_STATE_ID },
+    update: { lastIndexedLedger: ledger },
+    create: { id: SYNC_STATE_ID, lastIndexedLedger: ledger },
+  });
+}
+
 // ─── dead-letter queue ────────────────────────────────────────────────────────
 
 async function addToDLQ(
@@ -189,39 +208,6 @@ export async function getDLQStatus(): Promise<{
     prisma.horizonDlq.count(),
   ]);
   return { pending, total };
-}
-
-export async function getHorizonStatus(): Promise<{
-  cursor: string;
-  dlqPending: number;
-  health: string;
-}> {
-  const cursor = await getCursor();
-  const { pending } = await getDLQStatus();
-  return {
-    cursor,
-    dlqPending: pending,
-    health: getHorizonListenerHealth(),
-  };
-}
-
-// ─── sync-state persistence (legacy — kept for badges) ────────────────────────
-
-async function getLastIndexedLedger(): Promise<number> {
-  const row = await prisma.syncState.upsert({
-    where: { id: SYNC_STATE_ID },
-    update: {},
-    create: { id: SYNC_STATE_ID, lastIndexedLedger: 0 },
-  });
-  return row.lastIndexedLedger;
-}
-
-async function setLastIndexedLedger(ledger: number): Promise<void> {
-  await prisma.syncState.upsert({
-    where: { id: SYNC_STATE_ID },
-    update: { lastIndexedLedger: ledger },
-    create: { id: SYNC_STATE_ID, lastIndexedLedger: ledger },
-  });
 }
 
 // ─── event handlers ───────────────────────────────────────────────────────────
@@ -408,16 +394,11 @@ async function handleDisputeResolved(event: SorobanEvent): Promise<void> {
     payload: { onChainDisputeId, rawStatus },
   });
 
-  // Invalidate reputation cache for both client and freelancer (dispute affects reputation)
   if (dispute.job.client?.walletAddress) {
-    await ReputationCacheService.invalidateCache(
-      dispute.job.client.walletAddress,
-    );
+    await ReputationCacheService.invalidateCache(dispute.job.client.walletAddress);
   }
   if (dispute.job.freelancer?.walletAddress) {
-    await ReputationCacheService.invalidateCache(
-      dispute.job.freelancer.walletAddress,
-    );
+    await ReputationCacheService.invalidateCache(dispute.job.freelancer.walletAddress);
   }
 
   logger.info(
@@ -451,11 +432,7 @@ async function handleBadgeAwarded(event: SorobanEvent): Promise<void> {
   const result = await prisma.badge.upsert({
     where: { userId_tier: { userId: user.id, tier } },
     update: {},
-    create: {
-      userId: user.id,
-      tier,
-      awardedLedger: event.ledger,
-    },
+    create: { userId: user.id, tier, awardedLedger: event.ledger },
   });
 
   if (result.awardedLedger === event.ledger) {
@@ -469,12 +446,50 @@ async function handleBadgeAwarded(event: SorobanEvent): Promise<void> {
     });
   }
 
-  // Invalidate reputation cache for this user
   await ReputationCacheService.invalidateCache(walletAddress);
-  logger.info(
-    { walletAddress, tier },
-    "[HorizonListener] BadgeAwarded - cache invalidated",
-  );
+  logger.info({ walletAddress, tier }, "[HorizonListener] BadgeAwarded - cache invalidated");
+}
+
+/**
+ * escrow / paused — Paused { paused_by: Address }
+ */
+async function handleContractPaused(event: SorobanEvent): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const pausedBy = String(data?.paused_by ?? "");
+
+  // Mark all active jobs as paused in PostgreSQL
+  await prisma.job.updateMany({
+    where: {
+      status: {
+        in: ["OPEN", "IN_PROGRESS", "DISPUTED"],
+      },
+    },
+    data: {
+      contractPaused: true,
+    },
+  });
+
+  logger.info({ pausedBy, ledger: event.ledger }, "[HorizonListener] ContractPaused");
+}
+
+/**
+ * escrow / unpaused — Unpaused { unpaused_by: Address }
+ */
+async function handleContractUnpaused(event: SorobanEvent): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const unpausedBy = String(data?.unpaused_by ?? "");
+
+  // Unmark all paused jobs
+  await prisma.job.updateMany({
+    where: {
+      contractPaused: true,
+    },
+    data: {
+      contractPaused: false,
+    },
+  });
+
+  logger.info({ unpausedBy, ledger: event.ledger }, "[HorizonListener] ContractUnpaused");
 }
 
 // ─── event dispatch ───────────────────────────────────────────────────────────
@@ -499,7 +514,7 @@ async function resolvePreRegisteredTx(
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 3000, 9000]; // exponential backoff
 
-async function processEventWithRetry(
+export async function processHorizonEvent(
   event: SorobanEvent,
   attempt = 0,
 ): Promise<void> {
@@ -513,7 +528,7 @@ async function processEventWithRetry(
         "[HorizonListener] Retrying event processing",
       );
       await new Promise((resolve) => setTimeout(resolve, delay));
-      return processEventWithRetry(event, attempt + 1);
+      return processHorizonEvent(event, attempt + 1);
     }
     // After max retries, move to DLQ
     await addToDLQ(event.id, event, err?.message ?? "Unknown error");
@@ -524,31 +539,54 @@ async function processEventWithRetry(
   }
 }
 
+function eventCursor(event: SorobanEvent): string {
+  const cursor = event.pagingToken;
+  if (!cursor) {
+    throw new Error("Stellar RPC event did not include a paging token");
+  }
+  return cursor;
+}
+
+function eventTimestamp(event: SorobanEvent): Date {
+  const value = (event as SorobanEvent & { ledgerClosedAt?: string }).ledgerClosedAt;
+  const timestamp = value ? new Date(value) : new Date();
+  return Number.isNaN(timestamp.getTime()) ? new Date() : timestamp;
+}
+
 async function processEvent(event: SorobanEvent): Promise<void> {
   const [contract, name] = topicToStrings(event);
 
-  // Promote any PENDING pre-registration for this txHash to SUCCESS immediately.
   await resolvePreRegisteredTx(event.txHash, event.ledger);
 
-  if (contract === "escrow") {
-    if (name === "created") return await handleJobCreated(event);
-    if (name === "funded") return await handleJobFunded(event);
-    if (name === "pmt_released") return await handlePaymentReleased(event);
-  }
+  try {
+    if (contract === "escrow") {
+      if (name === "created") return await handleJobCreated(event);
+      if (name === "funded") return await handleJobFunded(event);
+      if (name === "pmt_released") return await handlePaymentReleased(event);
+      if (name === "paused")       return await handleContractPaused(event);
+      if (name === "unpaused")     return await handleContractUnpaused(event);
+    }
 
-  if (contract === "dispute") {
-    if (name === "raised") return await handleDisputeOpened(event);
-    if (name === "resolved") return await handleDisputeResolved(event);
-  }
+    if (contract === "dispute") {
+      if (name === "raised") return await handleDisputeOpened(event);
+      if (name === "resolved") return await handleDisputeResolved(event);
+    }
 
-  if (contract === "reput") {
-    if (name === "badge") return await handleBadgeAwarded(event);
+    if (contract === "reput") {
+      if (name === "badge") return await handleBadgeAwarded(event);
+    }
+  } catch (err) {
+    logger.error(
+      { err, contract, name, ledger: event.ledger },
+      "[HorizonListener] processEvent handler threw",
+    );
+    throw err; // re-throw so processHorizonEvent can handle retries/DLQ
   }
 }
 
 // ─── polling loop (circuit-breaker guarded) ───────────────────────────────────
 
-async function poll(): Promise<void> {
+export async function pollHorizonOnce(): Promise<void> {
   // Circuit breaker gate
   if (!horizonCB.allowRequest()) {
     const status = horizonCB.getStatus();
@@ -605,10 +643,9 @@ async function poll(): Promise<void> {
 
   try {
     const result = await server.getEvents({
-      startLedger,
       filters: [{ type: "contract", contractIds }],
-      limit: MAX_EVENTS_PER_POLL,
-    });
+      pagination: { cursor, limit: MAX_EVENTS_PER_POLL },
+    } as Parameters<typeof server.getEvents>[0]);
     events = result.events;
     horizonCB.onSuccess(); // successful Horizon call
     onPollSuccess();
@@ -638,7 +675,7 @@ async function poll(): Promise<void> {
   }
 
   for (const event of events) {
-    await processEventWithRetry(event);
+    await processHorizonEvent(event);
     if (event.ledger > maxEventLedger) maxEventLedger = event.ledger;
   }
 
@@ -648,10 +685,75 @@ async function poll(): Promise<void> {
   }
 }
 
+// ─── admin operations ─────────────────────────────────────────────────────────
+
+export async function getHorizonStatus(): Promise<{
+  cursor: string;
+  dlqDepth: number;
+  lastEventTimestamp: Date | null;
+}> {
+  const [cursor, dlqDepth] = await Promise.all([
+    prisma.horizonCursor.upsert({
+      where: { id: CURSOR_ID },
+      update: {},
+      create: { id: CURSOR_ID, cursor: "0" },
+    }),
+    prisma.horizonDlq.count({ where: { replayedAt: null } }),
+  ]);
+
+  return {
+    cursor: cursor.cursor,
+    dlqDepth,
+    lastEventTimestamp: cursor.lastEventAt,
+  };
+}
+
+export async function replayHorizonDlq(): Promise<{
+  replayed: number;
+  failed: number;
+}> {
+  const entries = await prisma.horizonDlq.findMany({
+    where: { replayedAt: null },
+    orderBy: [{ cursor: "asc" }, { id: "asc" }],
+  });
+
+  let replayed = 0;
+  let failed = 0;
+
+  for (const entry of entries) {
+    try {
+      const event = entry.payload as unknown as SorobanEvent;
+      await processEvent(event);
+      await prisma.horizonDlq.update({
+        where: { id: entry.id },
+        data: { replayedAt: new Date() },
+      });
+      replayed += 1;
+    } catch (err: any) {
+      failed += 1;
+      await prisma.horizonDlq.update({
+        where: { id: entry.id },
+        data: {
+          attempt: { increment: 1 },
+          error: err?.message ?? "Unknown error",
+        },
+      });
+    }
+  }
+
+  return { replayed, failed };
+}
+
+export async function overrideHorizonCursor(cursor: string): Promise<void> {
+  await setCursor(cursor);
+}
+
 // ─── public API ───────────────────────────────────────────────────────────────
 
+let intervalId: NodeJS.Timeout | null = null;
 let timerId: NodeJS.Timeout | null = null;
 let running = false;
+let activePoll: Promise<void> | null = null;
 
 export function startHorizonListener(): void {
   if (timerId || running) return;
@@ -679,8 +781,11 @@ export function startHorizonListener(): void {
   // poll can back off exponentially — 1s, 2s, 4s, 8s... capped at 60s —
   // instead of hammering an unreachable Horizon every POLL_INTERVAL_MS.
   const runPoll = async () => {
+    if (activePoll) return;
+
     try {
-      await poll();
+      activePoll = pollHorizonOnce();
+      await activePoll;
     } catch (err) {
       logger.error({ err }, "[HorizonListener] Poll error");
       onPollFailure(err);
@@ -698,6 +803,10 @@ export function startHorizonListener(): void {
 }
 
 export function stopHorizonListener(): void {
+  if (intervalId) {
+    clearInterval(intervalId);
+    intervalId = null;
+  }
   running = false;
   if (timerId) {
     clearTimeout(timerId);

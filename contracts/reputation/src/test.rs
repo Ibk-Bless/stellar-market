@@ -957,12 +957,12 @@ fn test_set_decay_rate() {
 
     reputation_client.initialize(&vec![&env, admin.clone()], &1u32, &50u32);
 
-    // Set valid decay rate
-    let prop_id = reputation_client.propose_admin_action(&admin, &AdminAction::SetDecayRate(75u32));
+    // Set a decay rate within the default maximum (MAX_DECAY_RATE = 20).
+    let _prop_id = reputation_client.propose_admin_action(&admin, &AdminAction::SetDecayRate(15u32));
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
+#[should_panic(expected = "Error(Contract, #25)")]
 fn test_set_decay_rate_invalid() {
     let env = Env::default();
     env.mock_all_auths();
@@ -973,8 +973,8 @@ fn test_set_decay_rate_invalid() {
 
     reputation_client.initialize(&vec![&env, admin.clone()], &1u32, &50u32);
 
-    // Set invalid decay rate > 100
-    reputation_client.propose_admin_action(&admin, &AdminAction::SetDecayRate(101u32));
+    // A decay rate above the maximum (#783) is rejected with DecayRateTooHigh (#25).
+    reputation_client.propose_admin_action(&admin, &AdminAction::SetDecayRate(21u32));
 }
 
 #[test]
@@ -2342,4 +2342,273 @@ fn test_badge_event_preserved_alongside_tier_up() {
     let badges = reputation_client.get_badges(&reviewee);
     assert_eq!(badges.len(), 1);
     assert_eq!(badges.get(0).unwrap().badge_type, ReputationTier::Silver);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #781 — Referral bonus timestamp validation
+// A future-dated bonus keeps `get_decay_factor` at elapsed_seconds = 0,
+// permanently exempting it from decay and inflating the score.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "Error(Contract, #24)")]
+fn test_add_referral_bonus_rejects_future_timestamp() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let user = Address::generate(&env);
+    // timestamp 1_001 > current ledger timestamp 1_000 -> InvalidTimestamp (#24)
+    client.add_referral_bonus(&admin, &user, &5u64, &1u64, &1_001u64);
+}
+
+#[test]
+fn test_add_referral_bonus_accepts_current_timestamp() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32); // no decay
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let user = Address::generate(&env);
+    // Current timestamp is accepted.
+    client.add_referral_bonus(&admin, &user, &5u64, &1u64, &1_000u64);
+
+    let rep = client.get_reputation(&user);
+    assert_eq!(rep.total_score, 5u64);
+    assert_eq!(rep.total_weight, 1u64);
+}
+
+#[test]
+fn test_add_referral_bonus_accepts_past_timestamp() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32); // no decay
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let user = Address::generate(&env);
+    // A past timestamp is accepted so the bonus decays from its true origin.
+    client.add_referral_bonus(&admin, &user, &5u64, &1u64, &500u64);
+
+    let rep = client.get_reputation(&user);
+    assert_eq!(rep.total_score, 5u64);
+    assert_eq!(rep.total_weight, 1u64);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #783 — Decay rate upper bound
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_update_decay_rate_within_bound_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    // 20 == MAX_DECAY_RATE default -> accepted.
+    client.update_decay_rate(&admin, &20u32);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #25)")]
+fn test_update_decay_rate_above_bound_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    // 21 > MAX_DECAY_RATE (20) -> DecayRateTooHigh (#25).
+    client.update_decay_rate(&admin, &21u32);
+}
+
+#[test]
+fn test_super_admin_can_raise_max_decay_rate() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    // Super-admin raises the ceiling to 30, then a previously-rejected 25 is allowed.
+    client.set_max_decay_rate(&admin, &30u32);
+    client.update_decay_rate(&admin, &25u32);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #25)")]
+fn test_set_max_decay_rate_hard_ceiling_enforced() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    // 51 > MAX_DECAY_RATE_HARD_CEILING (50) -> DecayRateTooHigh (#25).
+    client.set_max_decay_rate(&admin, &51u32);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #785 — Zero-score users are removed from the leaderboard
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_leaderboard_removes_fully_decayed_user() {
+    let env = setup_high_ttl_env();
+    env.mock_all_auths();
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &50u32); // 50%/yr
+
+    let reviewer = Address::generate(&env);
+    let reviewee = Address::generate(&env);
+    setup_review_for(&env, &escrow_id, &client, 1, &reviewer, &reviewee, 5);
+
+    // User with a non-zero score is on the leaderboard.
+    let before = client.get_leaderboard();
+    assert_eq!(before.len(), 1);
+    assert!(before.iter().any(|(addr, _)| addr == reviewee));
+
+    // Dormant long enough to fully decay: 5yr * 50% = 250% -> saturates to 0.
+    advance_n_periods(&env, 5);
+
+    // A subsequent reputation write re-runs update_leaderboard while totals are
+    // zero. A zero-value bonus (current timestamp) triggers it without adding score.
+    let now = env.ledger().timestamp();
+    client.add_referral_bonus(&admin, &reviewee, &0u64, &0u64, &now);
+
+    // The fully-decayed user has been removed; the leaderboard shrinks.
+    let after = client.get_leaderboard();
+    assert_eq!(after.len(), 0);
+    assert!(!after.iter().any(|(addr, _)| addr == reviewee));
+}
+
+// ── Issue #771: minimum stake weight threshold ───────────────────────────────
+
+#[test]
+#[should_panic(expected = "Error(Contract, #26)")]
+fn test_submit_review_with_zero_stake_weight_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    // Lower the economic min_stake to 0 so we can test the stake weight check directly.
+    client.propose_admin_action(&admin, &AdminAction::SetMinStake(0));
+
+    let reviewer = Address::generate(&env);
+    let reviewee = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_addr = create_token(&env, &token_admin);
+    mint(&env, &token_addr, &token_admin, &reviewer, 1_000_000_000);
+    setup_completed_job(&env, &escrow_id, 1, &reviewer, &reviewee, &token_addr);
+
+    // stake_weight = 0 is below MIN_STAKE_WEIGHT = 1 → StakeTooLow (#26)
+    client.submit_review(
+        &escrow_id,
+        &reviewer,
+        &reviewee,
+        &1u64,
+        &5u32,
+        &String::from_str(&env, "ok"),
+        &0i128,
+    );
+}
+
+#[test]
+fn test_stake_too_low_error_code_is_26() {
+    assert_eq!(ReputationError::StakeTooLow as u32, 26);
+}
+
+#[test]
+fn test_get_min_stake_weight_returns_default() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    let weight = client.get_min_stake_weight();
+    assert_eq!(weight, MIN_STAKE_WEIGHT);
+}
+
+#[test]
+fn test_set_min_stake_weight_admin_only() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    client.set_min_stake_weight(&admin, &5u64);
+    assert_eq!(client.get_min_stake_weight(), 5u64);
+}
+
+#[test]
+#[should_panic]
+fn test_set_min_stake_weight_non_signer_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    // Clear auths so the signer check actually fires.
+    env.set_auths(&[]);
+    client.set_min_stake_weight(&outsider, &10u64);
+}
+
+#[test]
+fn test_submit_review_with_stake_weight_at_minimum_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let escrow_id = env.register_contract(None, EscrowContract);
+    let reputation_id = env.register_contract(None, ReputationContract);
+    let client = ReputationContractClient::new(&env, &reputation_id);
+    let admin = Address::generate(&env);
+    client.initialize(&vec![&env, admin.clone()], &1u32, &0u32);
+
+    // Keep default min_stake, submit with exactly MIN_STAKE (which is >= MIN_STAKE_WEIGHT).
+    let reviewer = Address::generate(&env);
+    let reviewee = Address::generate(&env);
+    setup_review_for(&env, &escrow_id, &client, 1, &reviewer, &reviewee, 5);
+
+    let rep = client.get_reputation(&reviewee);
+    assert!(rep.total_weight > 0, "review should be recorded");
 }

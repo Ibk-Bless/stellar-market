@@ -81,7 +81,7 @@
                           }
                         },
                         {
-                          "u64": 1000000
+                          "u64": 333333
                         }
                       ]
                     },
@@ -97,7 +97,7 @@
                           }
                         },
                         {
-                          "u64": 1000000
+                          "u64": 666666
                         }
                       ]
                     },
@@ -496,7 +496,7 @@
                                   "symbol": "deadline"
                                 },
                                 "val": {
-                                  "u64": 1000000
+                                  "u64": 333333
                                 }
                               },
                               {
@@ -547,7 +547,7 @@
                                   "symbol": "deadline"
                                 },
                                 "val": {
-                                  "u64": 1000000
+                                  "u64": 666666
                                 }
                               },
                               {
@@ -1188,7 +1188,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 400
+                          "lo": 700
                         }
                       }
                     },
@@ -1262,79 +1262,6 @@
                         "i128": {
                           "hi": 0,
                           "lo": 9300
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "authorized"
-                      },
-                      "val": {
-                        "bool": true
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "clawback"
-                      },
-                      "val": {
-                        "bool": false
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          518400
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "Balance"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "Balance"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "amount"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 300
                         }
                       }
                     },
@@ -1818,7 +1745,7 @@
                           }
                         },
                         {
-                          "u64": 1000000
+                          "u64": 333333
                         }
                       ]
                     },
@@ -1834,7 +1761,7 @@
                           }
                         },
                         {
-                          "u64": 1000000
+                          "u64": 666666
                         }
                       ]
                     },
@@ -2231,98 +2158,6 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "d63a954726751a876d37290072af1ee723d7d761eec3bf4191849d2116acdc73"
-              },
-              {
-                "symbol": "transfer"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                },
-                {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 300
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "d63a954726751a876d37290072af1ee723d7d761eec3bf4191849d2116acdc73",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "transfer"
-              },
-              {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-              },
-              {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-              },
-              {
-                "string": "aaa:GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAL7NV"
-              }
-            ],
-            "data": {
-              "i128": {
-                "hi": 0,
-                "lo": 300
-              }
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "d63a954726751a876d37290072af1ee723d7d761eec3bf4191849d2116acdc73",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "transfer"
-              }
-            ],
-            "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
         "type_": "contract",
         "body": {
           "v0": {
@@ -2708,7 +2543,7 @@
                               "symbol": "deadline"
                             },
                             "val": {
-                              "u64": 1000000
+                              "u64": 333333
                             }
                           },
                           {
@@ -2759,7 +2594,7 @@
                               "symbol": "deadline"
                             },
                             "val": {
-                              "u64": 1000000
+                              "u64": 666666
                             }
                           },
                           {
@@ -3210,7 +3045,7 @@
                               "symbol": "deadline"
                             },
                             "val": {
-                              "u64": 1000000
+                              "u64": 333333
                             }
                           },
                           {
@@ -3261,7 +3096,7 @@
                               "symbol": "deadline"
                             },
                             "val": {
-                              "u64": 1000000
+                              "u64": 666666
                             }
                           },
                           {

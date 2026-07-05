@@ -3,8 +3,8 @@
 use super::*;
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, Events, Ledger},
-    Env, String,
+    testutils::{Address as _, BytesN as _, Events, Ledger},
+    BytesN, Env, String,
 };
 
 // Helper macro to add arbitrators and get assigned ones for a dispute
@@ -2628,4 +2628,270 @@ fn test_cast_vote_nonce_replay_rejected() {
 
     // voter1 tries to replay nonce 99 — should fail with NonceReplay
     client.cast_vote(&dispute_id, &voter1, &VoteChoice::Client, &String::from_str(&env, "replay"), &99);
+}
+
+// ── Issue #770: submit_evidence emits on-chain event ────────────────────────
+
+#[test]
+fn test_submit_evidence_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &contract_id);
+
+    let party_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &party_client,
+        &freelancer,
+        &party_client,
+        &String::from_str(&env, "Work not delivered"),
+        &3u32,
+        &None,
+    );
+
+    let hash: BytesN<32> = BytesN::random(&env);
+    client.submit_evidence(&dispute_id, &party_client, &hash);
+
+    let events = env.events().all();
+    assert!(!events.is_empty(), "at least one event should have been emitted");
+}
+
+#[test]
+fn test_submit_evidence_stores_and_retrieves() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &contract_id);
+
+    let party_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &party_client,
+        &freelancer,
+        &party_client,
+        &String::from_str(&env, "Scope creep"),
+        &3u32,
+        &None,
+    );
+
+    let hash1: BytesN<32> = BytesN::random(&env);
+    let hash2: BytesN<32> = BytesN::random(&env);
+
+    client.submit_evidence(&dispute_id, &party_client, &hash1);
+    client.submit_evidence(&dispute_id, &freelancer, &hash2);
+
+    let evidence = client.get_evidence(&dispute_id);
+    assert_eq!(evidence.len(), 2);
+    assert_eq!(evidence.get(0).unwrap().evidence_hash, hash1);
+    assert_eq!(evidence.get(1).unwrap().evidence_hash, hash2);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn test_submit_evidence_rejects_non_party() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &contract_id);
+
+    let party_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+    let outsider = Address::generate(&env);
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &party_client,
+        &freelancer,
+        &party_client,
+        &String::from_str(&env, "Breach"),
+        &3u32,
+        &None,
+    );
+
+    let hash: BytesN<32> = BytesN::random(&env);
+    client.submit_evidence(&dispute_id, &outsider, &hash);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1)")]
+fn test_submit_evidence_rejects_nonexistent_dispute() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &contract_id);
+
+    let submitter = Address::generate(&env);
+    let hash: BytesN<32> = BytesN::random(&env);
+    client.submit_evidence(&999u64, &submitter, &hash);
+}
+
+// ── Issue #773: vote_choice validated against defined VoteChoice variants ────
+
+#[test]
+fn test_cast_vote_valid_choices_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &contract_id);
+    let escrow_id = env.register_contract(None, DummyEscrow);
+    let reputation_id = env.register_contract(None, MockReputationContract);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &reputation_id, &0, &escrow_id);
+
+    let party_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    for _ in 0..5 {
+        client.add_arbitrator(&admin, &Address::generate(&env));
+    }
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &party_client,
+        &freelancer,
+        &party_client,
+        &String::from_str(&env, "dispute"),
+        &3u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+
+    // VoteChoice::Client is accepted
+    client.cast_vote(
+        &dispute_id,
+        &assigned.get(0).unwrap(),
+        &VoteChoice::Client,
+        &String::from_str(&env, "for client"),
+        &1u64,
+    );
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.votes_for_client, 1);
+
+    // VoteChoice::Freelancer is accepted
+    client.cast_vote(
+        &dispute_id,
+        &assigned.get(1).unwrap(),
+        &VoteChoice::Freelancer,
+        &String::from_str(&env, "for freelancer"),
+        &2u64,
+    );
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.votes_for_freelancer, 1);
+
+    // VoteChoice::RefundSplit is accepted with a valid percentage
+    client.cast_vote(
+        &dispute_id,
+        &assigned.get(2).unwrap(),
+        &VoteChoice::RefundSplit(50u32),
+        &String::from_str(&env, "refund split"),
+        &3u64,
+    );
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.votes_for_refund_split, 1);
+}
+
+#[test]
+fn test_invalid_vote_choice_error_code_is_24() {
+    // Verify that InvalidVoteChoice maps to discriminant 24.
+    // This ensures the on-chain ABI is stable and clients can reliably detect the error.
+    assert_eq!(DisputeError::InvalidVoteChoice as u32, 24);
+}
+
+#[test]
+fn test_cast_vote_split_award_bps_validation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &contract_id);
+    let escrow_id = env.register_contract(None, DummyEscrow);
+    let reputation_id = env.register_contract(None, MockReputationContract);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &reputation_id, &0, &escrow_id);
+
+    let party_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    for _ in 0..5 {
+        client.add_arbitrator(&admin, &Address::generate(&env));
+    }
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &party_client,
+        &freelancer,
+        &party_client,
+        &String::from_str(&env, "dispute"),
+        &3u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+
+    // SplitAward with valid bps (client_bps + freelancer_bps == 10_000) is accepted
+    client.cast_vote(
+        &dispute_id,
+        &assigned.get(0).unwrap(),
+        &VoteChoice::SplitAward(6000u32, 4000u32),
+        &String::from_str(&env, "split"),
+        &1u64,
+    );
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.votes_for_split_award, 1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn test_cast_vote_split_award_invalid_bps_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, DisputeContract);
+    let client = DisputeContractClient::new(&env, &contract_id);
+    let escrow_id = env.register_contract(None, DummyEscrow);
+    let reputation_id = env.register_contract(None, MockReputationContract);
+    let admin = Address::generate(&env);
+
+    client.initialize(&admin, &reputation_id, &0, &escrow_id);
+
+    let party_client = Address::generate(&env);
+    let freelancer = Address::generate(&env);
+
+    for _ in 0..5 {
+        client.add_arbitrator(&admin, &Address::generate(&env));
+    }
+
+    let dispute_id = client.raise_dispute(
+        &1u64,
+        &party_client,
+        &freelancer,
+        &party_client,
+        &String::from_str(&env, "dispute"),
+        &3u32,
+        &None,
+    );
+
+    let assigned = client.get_assigned_arbitrators(&dispute_id);
+
+    // SplitAward where bps don't sum to 10_000 — InvalidSplitBps (#18)
+    client.cast_vote(
+        &dispute_id,
+        &assigned.get(0).unwrap(),
+        &VoteChoice::SplitAward(9999u32, 0u32),
+        &String::from_str(&env, "bad split"),
+        &1u64,
+    );
 }

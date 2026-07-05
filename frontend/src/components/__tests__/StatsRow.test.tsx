@@ -64,7 +64,7 @@ describe("StatsRow component", () => {
     await waitFor(() => {
       expect(screen.getByText("3")).toBeInTheDocument(); // activeJobs
       expect(screen.getByText("10")).toBeInTheDocument(); // completedJobs
-      expect(screen.getByText("2,500 XLM")).toBeInTheDocument(); // totalEarnedXlm
+      expect(screen.getByText(/2[,\s\xA0]500 XLM/)).toBeInTheDocument(); // totalEarnedXlm
       expect(screen.getByText("4.5/5")).toBeInTheDocument(); // averageRating
     });
 

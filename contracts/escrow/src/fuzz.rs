@@ -109,6 +109,8 @@ fn fuzz_deposit_and_release_basic() {
                 .approve_milestone(&job_id, &(m_idx as u32), &client);
         }
 
+        contract.complete_job(&job_id, &client);
+
         let final_job = contract.get_job(&job_id);
         assert_eq!(final_job.status, JobStatus::Completed);
     }
@@ -223,6 +225,8 @@ fn fuzz_boundary_values() {
 
         contract
             .approve_milestone(&job_id, &0, &client);
+
+        contract.complete_job(&job_id, &client);
 
         let final_job = contract.get_job(&job_id);
         assert_eq!(final_job.status, JobStatus::Completed);
@@ -497,6 +501,8 @@ fn fuzz_approve_milestones_batch() {
         contract
             .approve_milestones_batch(&job_id, &indices, &client);
 
+        contract.complete_job(&job_id, &client);
+
         let final_job = contract.get_job(&job_id);
         assert_eq!(final_job.status, JobStatus::Completed);
     }
@@ -577,6 +583,8 @@ fn fuzz_no_panic_on_edge_cases() {
 
     contract
         .approve_milestone(&job_id, &0, &client);
+
+    contract.complete_job(&job_id, &client);
 
     let final_job = contract.get_job(&job_id);
     assert_eq!(final_job.status, JobStatus::Completed);

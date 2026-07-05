@@ -1,4 +1,4 @@
-import { PrismaClient, NotificationType } from "@prisma/client";
+import { Notification, PrismaClient, NotificationType } from "@prisma/client";
 import { getIo } from "../socket";
 import { EmailService } from "./email.service";
 import { config } from "../config";
@@ -355,6 +355,8 @@ export class NotificationService {
 
     if (!event) return;
 
+    const unsubscribeUrl = EmailService.buildUnsubscribeUrl(userId);
+
     // Do not catch the error, let it propagate so the worker fails and retries
     await EmailService.sendEventEmail({
       to: email,
@@ -363,6 +365,7 @@ export class NotificationService {
       message,
       outcome: metadata?.outcome,
       actionUrl,
+      unsubscribeUrl,
     });
   }
 

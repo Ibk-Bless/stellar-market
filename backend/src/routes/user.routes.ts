@@ -185,7 +185,6 @@ router.post(
             position: "center",
           })
           .jpeg({ quality: 85 })
-          .withMetadata(false)
           .toFile(processedPath);
 
         if (fs.existsSync(originalPath)) {

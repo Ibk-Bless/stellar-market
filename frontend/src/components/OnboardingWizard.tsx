@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { X, ChevronRight, Briefcase, Search, User, CheckCircle2, Loader2, Wallet, ExternalLink } from "lucide-react";
 import axios from "axios";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 const TOTAL_STEPS = 4;
@@ -282,6 +283,7 @@ export default function OnboardingWizard() {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [open, setOpen] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (user && user.completedOnboarding === false) {
@@ -307,6 +309,10 @@ export default function OnboardingWizard() {
     setOpen(false);
     await markComplete();
   }, [markComplete]);
+
+  useFocusTrap(modalRef, { open, onClose: handleSkip });
+
+  useFocusTrap(modalRef, { open, onClose: handleSkip });
 
   const handleStepOneNext = () => setStep(2);
 
@@ -337,7 +343,7 @@ export default function OnboardingWizard() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-theme-card border border-theme-border rounded-2xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in slide-in-from-bottom-4">
+      <div ref={modalRef} className="bg-theme-card border border-theme-border rounded-2xl shadow-2xl w-full max-w-md p-6 relative animate-in fade-in slide-in-from-bottom-4">
         <button
           onClick={handleSkip}
           className="absolute top-4 right-4 p-1.5 text-theme-text hover:text-theme-heading transition-colors"

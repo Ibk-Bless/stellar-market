@@ -80,7 +80,7 @@ describe("ClientEarningsPage", () => {
 
     await waitFor(() => expect(screen.getByTestId("bar-chart")).toBeInTheDocument());
 
-    expect(screen.getByText("2,900 XLM")).toBeInTheDocument();
+    expect(screen.getByText(/2[,\s\xA0]900 XLM/)).toBeInTheDocument();
     expect(screen.getByTestId("bar-f-1")).toHaveTextContent("alpha: 1500");
     expect(screen.getByTestId("bar-f-2")).toHaveTextContent("bravo: 500");
   });

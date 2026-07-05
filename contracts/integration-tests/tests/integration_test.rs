@@ -101,11 +101,11 @@ fn test_happy_path_job_completion_with_reputation() {
     // Step 1: Create job with milestones
     let milestones = vec![
         &env,
-        (String::from_str(&env, "Design phase"), 1_000_i128, DEADLINE),
+        (String::from_str(&env, "Design phase"), 1_000_i128, DEADLINE / 3),
         (
             String::from_str(&env, "Development phase"),
             2_000_i128,
-            DEADLINE,
+            DEADLINE * 2 / 3,
         ),
         (
             String::from_str(&env, "Testing phase"),
@@ -153,16 +153,16 @@ fn test_happy_path_job_completion_with_reputation() {
         job.milestones.get(0).unwrap().status,
         MilestoneStatus::Approved
     );
-    assert_eq!(token.balance(&freelancer), 100_001_000);
-    assert_eq!(token.balance(&escrow_id), 3_500);
 
     // Step 4: Complete remaining milestones
     escrow_client.submit_milestone(&job_id, &1, &freelancer);
     escrow_client.approve_milestone(&job_id, &1, &client);
-    assert_eq!(token.balance(&freelancer), 100_003_000);
 
     escrow_client.submit_milestone(&job_id, &2, &freelancer);
     escrow_client.approve_milestone(&job_id, &2, &client);
+
+    // Fee-on-completion: payment happens in complete_job, not per milestone
+    escrow_client.complete_job(&job_id, &client);
 
     let job = escrow_client.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Completed);
@@ -343,7 +343,7 @@ fn test_dispute_resolved_for_client() {
     // Create job with multiple milestones
     let milestones = vec![
         &env,
-        (String::from_str(&env, "Milestone 1"), 1_000_i128, DEADLINE),
+        (String::from_str(&env, "Milestone 1"), 1_000_i128, DEADLINE / 2),
         (String::from_str(&env, "Milestone 2"), 2_000_i128, DEADLINE),
     ];
 
@@ -436,8 +436,8 @@ fn test_full_workflow_with_partial_completion_and_cancellation() {
     // Create job with 3 milestones
     let milestones = vec![
         &env,
-        (String::from_str(&env, "Phase 1"), 1_000_i128, DEADLINE),
-        (String::from_str(&env, "Phase 2"), 1_500_i128, DEADLINE),
+        (String::from_str(&env, "Phase 1"), 1_000_i128, DEADLINE / 3),
+        (String::from_str(&env, "Phase 2"), 1_500_i128, DEADLINE * 2 / 3),
         (String::from_str(&env, "Phase 3"), 2_000_i128, DEADLINE),
     ];
 
@@ -455,7 +455,6 @@ fn test_full_workflow_with_partial_completion_and_cancellation() {
     // Complete first milestone
     escrow_client.submit_milestone(&job_id, &0, &freelancer);
     escrow_client.approve_milestone(&job_id, &0, &client);
-    assert_eq!(token.balance(&freelancer), 100_001_000);
 
     // Client cancels job (refunds remaining 3500)
     escrow_client.cancel_job(&job_id, &client, &0);
@@ -515,6 +514,7 @@ fn test_multiple_jobs_with_reputation_accumulation() {
     escrow_client.fund_job(&job_id1, &client1, &0, &0);
     escrow_client.submit_milestone(&job_id1, &0, &freelancer);
     escrow_client.approve_milestone(&job_id1, &0, &client1);
+    escrow_client.complete_job(&job_id1, &client1);
 
     // Job 2: Client2 -> Freelancer
     let milestones2 = vec![
@@ -533,6 +533,7 @@ fn test_multiple_jobs_with_reputation_accumulation() {
     escrow_client.fund_job(&job_id2, &client2, &0, &0);
     escrow_client.submit_milestone(&job_id2, &0, &freelancer);
     escrow_client.approve_milestone(&job_id2, &0, &client2);
+    escrow_client.complete_job(&job_id2, &client2);
 
     // Both clients review the freelancer
     reputation_client.submit_review(

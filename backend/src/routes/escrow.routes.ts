@@ -3,6 +3,7 @@ import { PrismaClient, EscrowStatus, NotificationType } from "@prisma/client";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { walletSourceGuard } from "../middleware/wallet-guard";
 import { asyncHandler } from "../middleware/error";
+import { idempotency } from "../middleware/idempotency";
 import { ContractService, ContractSimulationError } from "../services/contract.service";
 import { NotificationService } from "../services/notification.service";
 import { config } from "../config";
@@ -478,7 +479,7 @@ router.post(
  * In a real app, this should ideally be handled by an event listener/indexer,
  * but for this integration task, we verify the hash provided by the frontend.
  */
-router.post("/confirm-tx", authenticate, asyncHandler(async (req: AuthRequest, res: Response) => {
+router.post("/confirm-tx", authenticate, idempotency(), asyncHandler(async (req: AuthRequest, res: Response) => {
   const { hash, type, jobId, milestoneId, onChainJobId } = req.body;
 
   const verification = await ContractService.verifyTransaction(hash);

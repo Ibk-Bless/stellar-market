@@ -50,7 +50,22 @@ jest.mock("jsonwebtoken", () => ({
 
 // ─── Config mock (jwtSecret needed by auth middleware) ────────────────────────
 jest.mock("../config", () => ({
-  config: { jwtSecret: "test-secret" },
+  config: {
+    jwtSecret: "test-secret",
+    stellar: {
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      escrowContractId: "",
+      disputeContractId: "",
+      reputationContractId: "",
+    },
+    smtp: {
+      host: "smtp.test",
+      port: 587,
+      user: "",
+      pass: "",
+      from: "noreply@test.io",
+    },
+  },
 }));
 
 // ─── Notification service mock ────────────────────────────────────────────────

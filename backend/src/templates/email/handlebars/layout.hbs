@@ -21,6 +21,12 @@
       <p style="margin-top:28px;color:#6b7280;font-size:12px;">
         If you didn't expect this email, you can ignore it.
       </p>
+      {{#if unsubscribeUrl}}
+      <p style="margin-top:16px;color:#9ca3af;font-size:11px;border-top:1px solid #f3f4f6;padding-top:16px;">
+        You're receiving this because you have a StellarMarket account.
+        <a href="{{unsubscribeUrl}}" style="color:#9ca3af;text-decoration:underline;">Unsubscribe from marketing emails</a>
+      </p>
+      {{/if}}
     </div>
   </div>
 </div>

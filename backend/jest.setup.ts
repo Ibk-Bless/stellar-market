@@ -33,7 +33,16 @@ const mockRedisInstance = {
   expire: jest.fn().mockResolvedValue(1),
   rpush: jest.fn().mockResolvedValue(1),
   lpop: jest.fn().mockResolvedValue(null),
-  get: jest.fn().mockResolvedValue(null),
+  // Serve token-version.ts's auth cache lookup (issue #787) a fixed cached
+  // value so it never falls through to an uncounted prisma.user.findUnique
+  // call — tests that queue up exact findUnique sequences for their own
+  // assertions would otherwise have a slot silently consumed by this cache
+  // miss on every authenticated request.
+  get: jest.fn((key: string) =>
+    Promise.resolve(
+      typeof key === "string" && key.startsWith("auth:tokenVersion:") ? "0" : null,
+    ),
+  ),
   set: jest.fn().mockResolvedValue("OK"),
   del: jest.fn().mockResolvedValue(1),
   hget: jest.fn().mockResolvedValue(null),

@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, Env, IntoVal,
-    String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, vec, Address, BytesN, Env,
+    IntoVal, String, Symbol, Vec,
 };
 
 // Import reputation contract types for cross-contract calls
@@ -46,6 +46,8 @@ pub enum DisputeError {
     AppealNotFound = 21,
     NonceReplay = 22,
     DuplicateArbitrator = 23,
+    /// Returned when a vote_choice value does not map to a defined VoteChoice variant.
+    InvalidVoteChoice = 24,
 }
 
 #[contracttype]
@@ -132,6 +134,15 @@ pub struct Vote {
     pub choice: VoteChoice,
     pub reason: String,
     pub timestamp: u64,
+}
+
+/// A single piece of evidence attached to a dispute.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidenceRecord {
+    pub submitted_by: Address,
+    pub evidence_hash: BytesN<32>,
+    pub ledger: u32,
 }
 
 /// Maximum number of arbitrators that can be assigned to a single dispute.
@@ -242,6 +253,8 @@ enum DataKey {
     Nonce(Address, Symbol, u64),
     /// Stores the resolved split ratio for audit when a tie produces a 50/50 split.
     SplitRatio(u64),
+    /// Maps dispute_id → Vec<EvidenceRecord> for all submitted evidence.
+    Evidence(u64),
 }
 
 fn require_not_paused(env: &Env) -> Result<(), DisputeError> {
@@ -390,6 +403,14 @@ fn bump_dispute_tally_ttl(env: &Env, dispute_id: u64) {
 fn bump_arbitrators_ttl(env: &Env, dispute_id: u64) {
     env.storage().persistent().extend_ttl(
         &DataKey::Arbitrators(dispute_id),
+        MIN_TTL_THRESHOLD,
+        MIN_TTL_EXTEND_TO,
+    );
+}
+
+fn bump_evidence_ttl(env: &Env, dispute_id: u64) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::Evidence(dispute_id),
         MIN_TTL_THRESHOLD,
         MIN_TTL_EXTEND_TO,
     );
@@ -1682,6 +1703,73 @@ impl DisputeContract {
             .persistent()
             .get(&DataKey::Votes(dispute_id))
             .unwrap_or(Vec::new(&env))
+    }
+
+    /// Submit evidence for an active dispute.
+    ///
+    /// Only the client or freelancer involved in the dispute may submit evidence.
+    /// The dispute must be in `Open` or `Voting` status.
+    /// Emits `EvidenceSubmitted` so indexers can track evidence without polling storage.
+    pub fn submit_evidence(
+        env: Env,
+        dispute_id: u64,
+        submitted_by: Address,
+        evidence_hash: BytesN<32>,
+    ) -> Result<(), DisputeError> {
+        submitted_by.require_auth();
+        require_not_paused(&env)?;
+
+        let dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .ok_or(DisputeError::DisputeNotFound)?;
+        bump_dispute_ttl(&env, dispute_id);
+
+        if dispute.status != DisputeStatus::Open && dispute.status != DisputeStatus::Voting {
+            return Err(DisputeError::VotingClosed);
+        }
+
+        if submitted_by != dispute.client && submitted_by != dispute.freelancer {
+            return Err(DisputeError::InvalidParty);
+        }
+
+        let record = EvidenceRecord {
+            submitted_by: submitted_by.clone(),
+            evidence_hash: evidence_hash.clone(),
+            ledger: env.ledger().sequence(),
+        };
+
+        let mut evidence: Vec<EvidenceRecord> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Evidence(dispute_id))
+            .unwrap_or(Vec::new(&env));
+        evidence.push_back(record);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Evidence(dispute_id), &evidence);
+        bump_evidence_ttl(&env, dispute_id);
+
+        env.events().publish(
+            (symbol_short!("dispute"), symbol_short!("evidence")),
+            (dispute_id, submitted_by, evidence_hash, env.ledger().sequence()),
+        );
+
+        Ok(())
+    }
+
+    /// Get all evidence submitted for a dispute.
+    pub fn get_evidence(env: Env, dispute_id: u64) -> Vec<EvidenceRecord> {
+        let evidence = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Evidence(dispute_id))
+            .unwrap_or(Vec::new(&env));
+        if !evidence.is_empty() {
+            bump_evidence_ttl(&env, dispute_id);
+        }
+        evidence
     }
 
     /// Get all arbitrators (voters) who have voted on a dispute.

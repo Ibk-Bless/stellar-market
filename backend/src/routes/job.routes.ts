@@ -310,7 +310,9 @@ router.get(
       }
 
       if (category) {
-        where.category = { equals: category, mode: "insensitive" };
+        // Accept slug form (e.g. "smart-contract") or canonical form ("Smart Contract").
+        const normalised = (category as string).replace(/-/g, " ");
+        where.category = { equals: normalised, mode: "insensitive" };
       }
 
       if (status) {

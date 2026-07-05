@@ -40,7 +40,7 @@ describe("EvidenceViewer", () => {
 
     await waitFor(() => {
       expect(mockGet).toHaveBeenCalledWith(
-        "http://localhost:5000/api/disputes/dispute-1/evidence/evidence-1/download",
+        "http://localhost:5000/api/v1/disputes/dispute-1/evidence/evidence-1/download",
         expect.objectContaining({ responseType: "blob" }),
       );
     });
