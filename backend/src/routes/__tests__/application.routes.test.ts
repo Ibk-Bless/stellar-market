@@ -51,6 +51,11 @@ jest.mock("../../services/recommendation.service", () => ({
   },
 }));
 
+jest.mock("../../lib/token-version", () => ({
+  getCurrentTokenVersion: jest.fn().mockResolvedValue(null),
+  invalidateTokenVersionCache: jest.fn().mockResolvedValue(undefined),
+}));
+
 import { PrismaClient } from "@prisma/client";
 const prismaMock = new PrismaClient() as any;
 const jobMock = prismaMock.job;
@@ -232,6 +237,9 @@ describe("POST /api/jobs/:jobId/apply — wallet verification (#801)", () => {
   };
 
   it("returns 422 WalletRequired when freelancer has no wallet connected", async () => {
+    // auth middleware: role/emailVerified check
+    userMock.findUnique.mockResolvedValueOnce({ role: "FREELANCER", emailVerified: true });
+    // wallet check in route handler
     userMock.findUnique.mockResolvedValueOnce({ walletAddress: null });
 
     const res = await request(app)
@@ -247,6 +255,9 @@ describe("POST /api/jobs/:jobId/apply — wallet verification (#801)", () => {
   });
 
   it("proceeds past wallet check when freelancer has a wallet connected", async () => {
+    // auth middleware: role/emailVerified check
+    userMock.findUnique.mockResolvedValueOnce({ role: "FREELANCER", emailVerified: true });
+    // wallet check in route handler
     userMock.findUnique.mockResolvedValueOnce({
       walletAddress: "GDTEST000000000000000000000000000000000000000000000000000",
     });
