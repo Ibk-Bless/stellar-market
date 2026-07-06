@@ -21,7 +21,7 @@ jest.mock("@prisma/client", () => {
 });
 
 jest.mock("../../lib/cache", () => ({
-  cache: jest.fn((_key: string, _ttl: number, fn: () => unknown) => fn().then((d: unknown) => ({ data: d, hit: false }))),
+  cache: jest.fn((_key: string, _ttl: number, fn: () => Promise<unknown>) => fn().then((d) => ({ data: d, hit: false }))),
   invalidateCache: jest.fn(),
   invalidateCacheKey: jest.fn(),
   generateJobsCacheKey: jest.fn(() => "key"),
