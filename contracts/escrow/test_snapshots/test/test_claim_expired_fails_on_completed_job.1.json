@@ -2535,7 +2535,6 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-<<<<<<< HEAD
         "type_": "diagnostic",
         "body": {
           "v0": {
@@ -2628,8 +2627,6 @@
       "event": {
         "ext": "v0",
         "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-=======
->>>>>>> c0afc3c (fix: resolve backend build issues and fix contract test failures)
         "type_": "contract",
         "body": {
           "v0": {

@@ -1121,12 +1121,13 @@ impl EscrowContract {
                 bump_job_ttl(&env, job_id);
 
                 // Compute the remaining escrowed balance (total minus already-approved milestones).
-                let withdrawable: i128 = job
-            .milestones
-            .iter()
-            .filter(|m| m.status != MilestoneStatus::Approved)
-            .map(|m| m.amount)
-            .sum();
+                let approved_amount: i128 = job
+                    .milestones
+                    .iter()
+                    .filter(|m| m.status == MilestoneStatus::Approved)
+                    .map(|m| m.amount)
+                    .sum();
+                let withdrawable = job.total_amount - approved_amount;
 
                 if withdrawable <= 0 {
                     return Err(EscrowError::NoFundsToWithdraw);
@@ -1454,12 +1455,14 @@ impl EscrowContract {
         // STATE VALIDATION: Job must be in a disputable state
         require_state_disputable(&job)?;
 
-        let remaining: i128 = job
+        let approved_amount: i128 = job
             .milestones
             .iter()
-            .filter(|m| m.status != MilestoneStatus::Approved)
+            .filter(|m| m.status == MilestoneStatus::Approved)
             .map(|m| m.amount)
             .sum();
+
+        let remaining = job.total_amount - approved_amount;
 
         if remaining > 0 {
             // Funds remain — transfer them according to the resolution outcome.
@@ -2194,8 +2197,21 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&env, &job.token);
 
-        // Tokens are transferred upon milestone approval.
-        // complete_job only finalizes the status and emits the summary events.
+        if fee_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &fee_recipient,
+                &fee_amount,
+            );
+        }
+
+        if freelancer_amount > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &job.freelancer,
+                &freelancer_amount,
+            );
+        }
 
         job.status = JobStatus::Completed;
         env.storage().persistent().set(&get_job_key(job_id), &job);
@@ -2421,14 +2437,17 @@ impl EscrowContract {
 
         // Refund the remaining escrowed amount (total minus already-approved milestones).
         // Pay already-approved milestones to the freelancer, since payment only happens in complete_job.
-        let refund: i128 = job
+        let approved_amount: i128 = job
             .milestones
             .iter()
-            .filter(|m| m.status != MilestoneStatus::Approved)
+            .filter(|m| m.status == MilestoneStatus::Approved)
             .map(|m| m.amount)
             .sum();
+        let refund = job.total_amount - approved_amount;
         let token_client = token::Client::new(&env, &job.token);
-        
+        if approved_amount > 0 {
+            token_client.transfer(&env.current_contract_address(), &job.freelancer, &approved_amount);
+        }
         if refund > 0 {
             token_client.transfer(&env.current_contract_address(), &client, &refund);
         }
@@ -2485,21 +2504,27 @@ impl EscrowContract {
         }
 
         // Calculate refund: total minus already-approved milestone amounts
-        let refund: i128 = job
+        let approved_amount: i128 = job
             .milestones
             .iter()
-            .filter(|m| m.status != MilestoneStatus::Approved)
+            .filter(|m| m.status == MilestoneStatus::Approved)
             .map(|m| m.amount)
             .sum();
+
+        let refund = job.total_amount - approved_amount;
 
         // If there's nothing to distribute (all approved, nothing to refund), still
         // pay the approved amount to the freelancer before returning.
         let token_client = token::Client::new(&env, &job.token);
 
-        
+        if approved_amount > 0 {
+            token_client.transfer(&env.current_contract_address(), &job.freelancer, &approved_amount);
+        }
 
         if refund <= 0 {
-            return Err(EscrowError::NoRefundDue);
+            if approved_amount == 0 {
+                return Err(EscrowError::NoRefundDue);
+            }
             // approved_amount paid above — no refund due to client, just update status
             job.status = JobStatus::Cancelled;
             env.storage().persistent().set(&get_job_key(job_id), &job);
@@ -2574,12 +2599,13 @@ impl EscrowContract {
         }
 
         // Calculate remaining locked balance (total minus already-approved milestones).
-        let remaining: i128 = job
+        let approved_amount: i128 = job
             .milestones
             .iter()
-            .filter(|m| m.status != MilestoneStatus::Approved)
+            .filter(|m| m.status == MilestoneStatus::Approved)
             .map(|m| m.amount)
             .sum();
+        let remaining = job.total_amount - approved_amount;
 
         if amount <= 0 || amount > remaining {
             return Err(EscrowError::InsufficientFunds);
@@ -3181,16 +3207,23 @@ impl EscrowContract {
         // Refund remaining escrowed balance (total minus already-approved milestones).
         // Also pay the approved milestone amounts to the freelancer, since payment
         // only happens during complete_job.
-        let refund: i128 = job
+        let approved_amount: i128 = job
             .milestones
             .iter()
-            .filter(|m| m.status != MilestoneStatus::Approved)
+            .filter(|m| m.status == MilestoneStatus::Approved)
             .map(|m| m.amount)
             .sum();
+        let refund = job.total_amount - approved_amount;
 
         let token_client = token::Client::new(&env, &job.token);
 
-        
+        if approved_amount > 0
+            && (job.status == JobStatus::Funded
+                || job.status == JobStatus::InProgress
+                || job.status == JobStatus::Disputed)
+        {
+            token_client.transfer(&env.current_contract_address(), &job.freelancer, &approved_amount);
+        }
 
         // Only transfer if funds are actually held in escrow (job was funded).
         if refund > 0

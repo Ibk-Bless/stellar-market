@@ -268,8 +268,8 @@ fn test_create_job_too_many_milestones() {
     let (contract, user, freelancer, token, admin) = setup_test(&env);
 
     let mut milestones = vec![&env];
-    for _ in 0..21 {
-        milestones.push_back((String::from_str(&env, "Task"), 100_i128, 2000_u64));
+    for i in 0..51u64 {
+        milestones.push_back((String::from_str(&env, "Task"), 100_i128, (i + 1) * 10_000_u64));
     }
 
     contract.create_job(
@@ -988,7 +988,7 @@ fn test_propose_revision_too_many_milestones() {
     let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
 
     let mut new_milestones = vec![&env];
-    for i in 0..21 {
+    for i in 0..51u32 {
         new_milestones.push_back(Milestone {
             id: i,
             description: String::from_str(&env, "New"),
@@ -2211,6 +2211,8 @@ fn test_fee_deduction_single_approval() {
     escrow.approve_milestone(&job_id, &0, &client_addr);
 
     let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&treasury), 0);
+    assert_eq!(token_client.balance(&freelancer), 0);
 
     // Complete the job — fee is deducted and remainder paid to freelancer
     escrow.complete_job(&job_id, &client_addr);
@@ -2263,6 +2265,8 @@ fn test_fee_deduction_batch_approval() {
     escrow.approve_milestones_batch(&job_id, &indices, &client_addr);
 
     let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&treasury), 0);
+    assert_eq!(token_client.balance(&freelancer), 0);
 
     // Complete the job — fee is deducted and remainder paid to freelancer
     escrow.complete_job(&job_id, &client_addr);
@@ -2304,6 +2308,8 @@ fn test_complete_job_3_percent_fee() {
     escrow.approve_milestone(&job_id, &0, &client_addr);
 
     let token_client = TokenClient::new(&env, &token);
+    assert_eq!(token_client.balance(&treasury), 0);
+    assert_eq!(token_client.balance(&freelancer), 0);
 
     escrow.complete_job(&job_id, &client_addr);
 
@@ -2342,6 +2348,7 @@ fn test_complete_job_zero_fee() {
 
     let token_client = TokenClient::new(&env, &token);
     // No fee — freelancer gets full amount
+    assert_eq!(token_client.balance(&treasury), 0);
     assert_eq!(token_client.balance(&freelancer), amount);
 }
 
@@ -2726,14 +2733,14 @@ fn test_payment_released_event_emitted_on_last_milestone_approval() {
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client_addr);
 
-    // Job stays InProgress until complete_job is called
+    // Job should be InProgress until complete_job
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::InProgress);
 
-    // Freelancer paid on approve_milestone (immediate payment model)
-    assert_eq!(token.balance(&freelancer), amount);
+    // Freelancer not yet paid
+    assert_eq!(token.balance(&freelancer), 0);
 
-    // complete_job finalizes status and emits summary events
+    // Complete the job to trigger payment
     contract.complete_job(&job_id, &client_addr);
 
     let job = contract.get_job(&job_id);
@@ -2745,7 +2752,7 @@ fn test_payment_released_event_emitted_on_last_milestone_approval() {
     let topic1: Symbol = last_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic1, Symbol::new(&env, "pmt_released"), "Last event should be pmt_released");
 
-    // Freelancer balance is still full amount (no fee, paid on approval)
+    // Freelancer should have received full payment (no fee configured)
     assert_eq!(token.balance(&freelancer), amount);
 }
 
@@ -3490,7 +3497,6 @@ fn test_fund_job_fails_when_completed() {
     contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
-    contract.complete_job(&job_id, &client);
     
     // Job is now Completed (terminal state)
     // Try to fund again (invalid: Completed -> Funded)
@@ -3587,7 +3593,8 @@ fn test_cancel_job_fails_when_completed() {
     contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
-    
+    contract.complete_job(&job_id, &client);
+
     // Job is now Completed (terminal state)
     // Try to cancel (invalid: Completed is terminal)
     contract.cancel_job(&job_id, &client, &0);
@@ -3661,7 +3668,8 @@ fn test_top_up_escrow_fails_when_completed() {
     contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
-    
+    contract.complete_job(&job_id, &client);
+
     // Job is now Completed
     // Try to top up (invalid: Completed is terminal)
     contract.top_up_escrow(&client, &job_id, &100_i128);
@@ -3681,7 +3689,8 @@ fn test_expire_job_fails_when_completed() {
     contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
-    
+    contract.complete_job(&job_id, &client);
+
     // Job is now Completed (terminal state)
     // Advance time past deadline
     env.ledger().with_mut(|l| l.timestamp = JOB_DEADLINE + 1);
@@ -3815,7 +3824,8 @@ fn test_resolve_dispute_fails_when_completed() {
     contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
-    
+    contract.complete_job(&job_id, &client);
+
     // Job is now Completed (terminal state)
     // Try to resolve dispute (invalid: Completed is terminal)
     contract.resolve_dispute_callback(&job_id, &DisputeResolution::ClientWins);
@@ -3899,9 +3909,10 @@ fn test_state_transition_in_progress_to_completed() {
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::InProgress);
     
-    // Valid transition: InProgress -> Completed requires complete_job
+    // Valid transition: InProgress -> Completed (when all milestones approved)
     contract.approve_milestone(&job_id, &0, &client);
-    
+    contract.complete_job(&job_id, &client);
+
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Completed);
 }
@@ -3920,7 +3931,8 @@ fn test_terminal_states_cannot_transition() {
     contract.fund_job(&job_id, &client, &0, &0);
     contract.submit_milestone(&job_id, &0, &freelancer);
     contract.approve_milestone(&job_id, &0, &client);
-    
+    contract.complete_job(&job_id, &client);
+
     let job = contract.get_job(&job_id);
     assert_eq!(job.status, JobStatus::Completed);
 
