@@ -3276,7 +3276,18 @@ fn test_add_allowed_token() {
 
     let allowed = contract.get_allowed_tokens();
     assert_eq!(allowed.len(), 1);
-    assert_eq!(allowed.get(0).unwrap(), new_token);
+    assert_eq!(allowed.get(0).unwrap(), new_token.clone());
+
+    let events = env.events().all();
+    let last_event = events.last().expect("token_allowed event should be emitted");
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    let topic1: Symbol = last_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic0, symbol_short!("escrow"));
+    assert_eq!(topic1, Symbol::new(&env, "token_allowed"));
+    
+    let payload: (Address, Address) = last_event.2.into_val(&env);
+    assert_eq!(payload.0, new_token);
+    assert_eq!(payload.1, admin);
 }
 
 #[test]
@@ -3318,6 +3329,17 @@ fn test_remove_allowed_token() {
     contract.remove_allowed_token(&admin, &new_token);
     let allowed = contract.get_allowed_tokens();
     assert_eq!(allowed.len(), 0);
+
+    let events = env.events().all();
+    let last_event = events.last().expect("token_revoked event should be emitted");
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    let topic1: Symbol = last_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic0, symbol_short!("escrow"));
+    assert_eq!(topic1, Symbol::new(&env, "token_revoked"));
+
+    let payload: (Address, Address) = last_event.2.into_val(&env);
+    assert_eq!(payload.0, new_token);
+    assert_eq!(payload.1, admin);
 }
 
 #[test]
@@ -5570,6 +5592,49 @@ fn test_calculate_payout_sum_invariant() {
             }
         }
     }
+}
+
+#[test]
+fn test_add_allowed_token_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, token, admin) = setup_test(&env);
+    
+    client.add_allowed_token(&admin, &token);
+    
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    
+    assert_eq!(last_event.0, client.address);
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, symbol_short!("escrow"));
+    let topic1: Symbol = last_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, Symbol::new(&env, "token_allowed"));
+    
+    let payload: (Address, Address) = last_event.2.into_val(&env);
+    assert_eq!(payload, (token, admin));
+}
+
+#[test]
+fn test_remove_allowed_token_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _, _, token, admin) = setup_test(&env);
+    
+    client.add_allowed_token(&admin, &token);
+    client.remove_allowed_token(&admin, &token);
+    
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    
+    assert_eq!(last_event.0, client.address);
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, symbol_short!("escrow"));
+    let topic1: Symbol = last_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, Symbol::new(&env, "token_revoked"));
+    
+    let payload: (Address, Address) = last_event.2.into_val(&env);
+    assert_eq!(payload, (token, admin));
 }
 
 // ── Issue #772: milestone deadline validation ────────────────────────────────
