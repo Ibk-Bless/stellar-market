@@ -79,7 +79,7 @@ describe("ChatWindow", () => {
     expect(screen.getByText("Hey there live!")).toBeInTheDocument();
   });
 
-  it("emits send_message with correct payload on form submit", async () => {
+  it("emits send_message with a client id and ack callback on form submit", async () => {
     render(<ChatWindow {...baseProps} />);
 
     const textarea = screen.getByPlaceholderText(/message bob/i);
@@ -88,10 +88,21 @@ describe("ChatWindow", () => {
     const sendBtn = screen.getByRole("button", { name: "" }); // Send icon button
     fireEvent.click(sendBtn);
 
-    expect(mockSocket.emit).toHaveBeenCalledWith("send_message", {
-      receiverId: "user-bob",
-      content: "Hi Bob!",
-    });
+    expect(mockSocket.emit).toHaveBeenCalledWith(
+      "send_message",
+      expect.objectContaining({ receiverId: "user-bob", content: "Hi Bob!" }),
+      expect.any(Function)
+    );
+  });
+
+  it("shows the message optimistically before the server acks it", async () => {
+    render(<ChatWindow {...baseProps} />);
+
+    const textarea = screen.getByPlaceholderText(/message bob/i);
+    fireEvent.change(textarea, { target: { value: "Hi Bob!" } });
+    fireEvent.click(screen.getByRole("button", { name: "" }));
+
+    expect(screen.getByText("Hi Bob!")).toBeInTheDocument();
   });
 
   it("emits typing_start when user types and typing_stop after debounce", async () => {
