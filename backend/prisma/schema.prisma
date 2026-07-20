@@ -328,6 +328,7 @@ model Invitation {
 
 model Message {
   id         String   @id @default(cuid())
+  clientId   String?  @unique
   senderId   String
   receiverId String
   jobId      String?
