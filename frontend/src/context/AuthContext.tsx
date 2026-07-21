@@ -7,6 +7,7 @@ import React, {
   useEffect,
   useCallback,
   useMemo,
+  useRef,
 } from "react";
 import axios from "axios";
 import { User } from "@/types";
@@ -28,6 +29,7 @@ export const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000/api/v1";
 const TOKEN_KEY = "stellarmarket_jwt";
 const USER_KEY = "stellarmarket_user";
+const AUTH_LOGOUT_EVENT = "stellarmarket:authLogout";
 
 const setCookie = (name: string, value: string, days: number) => {
   const expires = new Date(Date.now() + days * 864e5).toUTCString();
@@ -46,12 +48,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
+  const tokenRef = useRef<string | null>(token);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     removeCookie(TOKEN_KEY);
     setToken(null);
     setUser(null);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(AUTH_LOGOUT_EVENT));
+    }
     router.push("/auth/login");
   }, [router]);
 
@@ -59,6 +69,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const storedToken = localStorage.getItem(TOKEN_KEY);
     if (!storedToken) {
       setIsLoading(false);
+      setToken(null);
+      setUser(null);
       return;
     }
 
@@ -69,10 +81,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         headers: { Authorization: `Bearer ${storedToken}` },
       });
       const userData = response.data;
-      setUser(userData);
-      localStorage.setItem(USER_KEY, JSON.stringify(userData));
+      if (typeof window !== "undefined" && localStorage.getItem(TOKEN_KEY)) {
+        setUser(userData);
+        localStorage.setItem(USER_KEY, JSON.stringify(userData));
+      }
     } catch (error) {
       console.error("Failed to fetch user:", error);
+      if (typeof window !== "undefined" && !localStorage.getItem(TOKEN_KEY)) {
+        setToken(null);
+        setUser(null);
+        setIsLoading(false);
+        return;
+      }
       logout();
     } finally {
       setIsLoading(false);
@@ -80,6 +100,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, [logout]);
 
   useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === TOKEN_KEY) {
+        if (!event.newValue) {
+          removeCookie(TOKEN_KEY);
+          setToken(null);
+          setUser(null);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent(AUTH_LOGOUT_EVENT));
+          }
+          router.push("/auth/login");
+        } else if (tokenRef.current && event.newValue !== tokenRef.current) {
+          removeCookie(TOKEN_KEY);
+          setToken(null);
+          setUser(null);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent(AUTH_LOGOUT_EVENT));
+          }
+          router.push("/auth/login");
+        }
+      } else if (event.key === USER_KEY) {
+        if (!event.newValue) {
+          setUser(null);
+        } else if (tokenRef.current) {
+          try {
+            setUser(JSON.parse(event.newValue));
+          } catch {
+            setUser(null);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, [router]);
+
+  const initializedRef = useRef(false);
+  useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+
     const storedToken = localStorage.getItem(TOKEN_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
 
@@ -87,7 +150,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       try {
         setToken(storedToken);
         setUser(JSON.parse(storedUser));
-        // Still refresh to ensure user is valid and data is fresh
         refreshUser();
       } catch {
         logout();

@@ -58,11 +58,22 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   }, [token]);
 
   useEffect(() => {
+    if (!token) {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      setIsConnected(false);
+      setLiveNotifications([]);
+      return;
+    }
+
     connect();
 
     return () => {
       socketRef.current?.disconnect();
       socketRef.current = null;
+      setIsConnected(false);
     };
   }, [connect, token]);
 

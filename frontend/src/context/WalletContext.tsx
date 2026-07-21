@@ -711,6 +711,29 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     window.dispatchEvent(new CustomEvent("stellarmarket:walletDisconnected"));
   }, [clearSession]);
 
+  useEffect(() => {
+    const handleAuthLogout = () => {
+      disconnect();
+    };
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (
+        (event.key === null || event.key === "stellarmarket_jwt" || event.key === SESSION_KEY) &&
+        !event.newValue
+      ) {
+        disconnect();
+      }
+    };
+
+    window.addEventListener("stellarmarket:authLogout", handleAuthLogout);
+    window.addEventListener("storage", handleStorageChange);
+
+    return () => {
+      window.removeEventListener("stellarmarket:authLogout", handleAuthLogout);
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [disconnect]);
+
   const handleDisconnectConfirm = useCallback(async (confirmed: boolean) => {
     setShowDisconnectConfirm(false);
     if (confirmed) {
