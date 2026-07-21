@@ -14,21 +14,45 @@ export function registerMessageHandlers(
   // ─── send_message ────────────────────────────────────────────────────────────
   socket.on(
     "send_message",
-    async (payload: { receiverId: string; content: string; jobId?: string }) => {
-      const { receiverId, content, jobId } = payload;
+    async (
+      payload: { receiverId: string; content: string; jobId?: string; clientId?: string },
+      ack?: (response: { ok: boolean; message?: unknown; error?: string }) => void
+    ) => {
+      const { receiverId, content, jobId, clientId } = payload;
 
       if (!receiverId || !content) {
-        socket.emit("error", { message: "receiverId and content are required." });
+        const error = "receiverId and content are required.";
+        socket.emit("error", { message: error });
+        ack?.({ ok: false, error });
         return;
       }
 
       try {
+        // Idempotency: if this clientId was already persisted (e.g. the
+        // original ack was lost but the write actually succeeded), return
+        // the existing row instead of creating a duplicate message.
+        if (clientId) {
+          const existing = await prisma.message.findUnique({
+            where: { clientId },
+            include: {
+              sender: { select: { id: true, username: true, avatarUrl: true } },
+              receiver: { select: { id: true, username: true, avatarUrl: true } },
+            },
+          });
+
+          if (existing) {
+            ack?.({ ok: true, message: existing });
+            return;
+          }
+        }
+
         const message = await prisma.message.create({
           data: {
             senderId,
             receiverId,
             jobId: jobId ?? null,
             content,
+            clientId: clientId ?? null,
           },
           include: {
             sender: { select: { id: true, username: true, avatarUrl: true } },
@@ -40,9 +64,12 @@ export function registerMessageHandlers(
         io.to(`user:${receiverId}`).emit("new_message", message);
         // Also emit back to sender (so other sender tabs update instantly)
         socket.emit("new_message", message);
+
+        ack?.({ ok: true, message });
       } catch (err) {
         logger.error({ err, senderId, receiverId }, "send_message error");
         socket.emit("error", { message: "Failed to send message." });
+        ack?.({ ok: false, error: "Failed to send message." });
       }
     }
   );

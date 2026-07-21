@@ -20,6 +20,7 @@ jest.mock("@prisma/client", () => {
     message: {
       create: jest.fn(),
       updateMany: jest.fn(),
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     pendingNotification: {
       findMany: jest.fn().mockResolvedValue([]),
@@ -34,6 +35,7 @@ const prismaMock = new PrismaClient() as jest.Mocked<PrismaClient>;
 const messageMock = prismaMock.message as unknown as {
   create: jest.Mock;
   updateMany: jest.Mock;
+  findUnique: jest.Mock;
 };
 
 // ─── Helper: make a signed JWT ────────────────────────────────────────────────
@@ -175,6 +177,88 @@ describe("send_message event", () => {
     });
 
     expect(err.message).toMatch(/receiverId and content are required/i);
+    client.disconnect();
+  });
+
+  it("acks with ok:true and the persisted message on a successful send", async () => {
+    const mockMessage = {
+      id: "msg-ack-1",
+      clientId: "client-ack-1",
+      senderId: "user-1",
+      receiverId: "user-2",
+      content: "Acked!",
+      read: false,
+      createdAt: new Date(),
+      sender: { id: "user-1", username: "alice", avatarUrl: null },
+      receiver: { id: "user-2", username: "bob", avatarUrl: null },
+    };
+    messageMock.findUnique.mockResolvedValueOnce(null);
+    messageMock.create.mockResolvedValueOnce(mockMessage);
+
+    const client = await connectClient(makeToken("user-1"));
+
+    const ack = await new Promise<{ ok: boolean; message?: unknown }>((resolve) => {
+      client.emit(
+        "send_message",
+        { receiverId: "user-2", content: "Acked!", clientId: "client-ack-1" },
+        resolve
+      );
+    });
+
+    expect(ack.ok).toBe(true);
+    expect(ack.message).toMatchObject({ content: "Acked!", clientId: "client-ack-1" });
+    expect(messageMock.create).toHaveBeenCalledTimes(1);
+    client.disconnect();
+  });
+
+  it("is idempotent on clientId: a retried send with the same clientId does not create a duplicate", async () => {
+    const existingMessage = {
+      id: "msg-existing",
+      clientId: "client-retry-1",
+      senderId: "user-1",
+      receiverId: "user-2",
+      content: "Already sent",
+      read: false,
+      createdAt: new Date(),
+      sender: { id: "user-1", username: "alice", avatarUrl: null },
+      receiver: { id: "user-2", username: "bob", avatarUrl: null },
+    };
+    // Simulates the original write having already succeeded server-side
+    // (e.g. the ack for it was lost), so findUnique short-circuits create.
+    messageMock.findUnique.mockResolvedValueOnce(existingMessage);
+
+    const client = await connectClient(makeToken("user-1"));
+
+    const ack = await new Promise<{ ok: boolean; message?: unknown }>((resolve) => {
+      client.emit(
+        "send_message",
+        { receiverId: "user-2", content: "Already sent", clientId: "client-retry-1" },
+        resolve
+      );
+    });
+
+    expect(ack.ok).toBe(true);
+    expect(ack.message).toMatchObject({ id: "msg-existing", clientId: "client-retry-1" });
+    expect(messageMock.create).not.toHaveBeenCalled();
+    client.disconnect();
+  });
+
+  it("acks with ok:false when persisting the message fails", async () => {
+    messageMock.findUnique.mockResolvedValueOnce(null);
+    messageMock.create.mockRejectedValueOnce(new Error("db down"));
+
+    const client = await connectClient(makeToken("user-1"));
+
+    const ack = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      client.emit(
+        "send_message",
+        { receiverId: "user-2", content: "Will fail", clientId: "client-fail-1" },
+        resolve
+      );
+    });
+
+    expect(ack.ok).toBe(false);
+    expect(ack.error).toMatch(/failed to send message/i);
     client.disconnect();
   });
 });

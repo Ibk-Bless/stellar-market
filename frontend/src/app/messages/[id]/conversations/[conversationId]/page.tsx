@@ -73,9 +73,12 @@ export default function ConversationPage() {
 
       <div className="flex-1 bg-theme-card border border-theme-border rounded-xl overflow-hidden flex flex-col">
         <ChatWindow
+          key={partnerId}
           currentUserId={currentUser?.id || ""}
           partnerId={partnerId}
           partnerUsername={partnerUsername || partnerId}
+          currentUsername={currentUser?.username || ""}
+          currentUserAvatarUrl={currentUser?.avatarUrl || null}
           initialMessages={messages}
         />
       </div>
