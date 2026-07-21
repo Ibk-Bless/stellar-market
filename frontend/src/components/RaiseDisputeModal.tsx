@@ -142,15 +142,33 @@ export default function RaiseDisputeModal({
     try {
       const token = localStorage.getItem("token");
 
+      const fetchRaiseDisputeXdr = async () => {
+        const r = await axios.post(
+          `${API_URL}/disputes/init-raise`,
+          { jobId: job.id, reason, minVotes },
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+        return r.data;
+      };
+
       // 1. Get XDR
-      const res = await axios.post(
-        `${API_URL}/disputes/init-raise`,
-        { jobId: job.id, reason, minVotes },
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
+      let initData = await fetchRaiseDisputeXdr();
 
       // 2. Sign & Broadcast
-      const txResult = await signAndBroadcastTransaction(res.data.xdr);
+      let txResult = await signAndBroadcastTransaction(initData.xdr, {
+        type: "DISPUTE_PAYOUT",
+        jobId: job.id,
+      });
+
+      if (!txResult.success && txResult.canRetry) {
+        // Expired before confirmation — rebuild with a fresh sequence number
+        // and resubmit once rather than surfacing a generic timeout.
+        initData = await fetchRaiseDisputeXdr();
+        txResult = await signAndBroadcastTransaction(initData.xdr, {
+          type: "DISPUTE_PAYOUT",
+          jobId: job.id,
+        });
+      }
 
       if (!txResult.success) {
         throw new Error(txResult.error || "Transaction failed");
@@ -164,7 +182,7 @@ export default function RaiseDisputeModal({
           type: "RAISE_DISPUTE",
           jobId: job.id,
           onChainDisputeId: 1,
-          respondentId: res.data.respondentId,
+          respondentId: initData.respondentId,
           reason,
         },
         { headers: { Authorization: `Bearer ${token}` } },

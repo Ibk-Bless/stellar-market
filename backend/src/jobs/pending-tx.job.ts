@@ -28,8 +28,6 @@ async function checkPendingTransactions(): Promise<void> {
 
   logger.info({ count: pending.length }, "[PendingTxJob] Checking pending transactions");
 
-  let latestLedger: number | null = null;
-
   for (const tx of pending) {
     try {
       const result = await rpcServer.getTransaction(tx.txHash);
@@ -55,13 +53,14 @@ async function checkPendingTransactions(): Promise<void> {
         continue;
       }
 
-      // NOT_FOUND — check expiry if maxLedger is set
+      // NOT_FOUND — check expiry if maxLedger is set. `maxLedger` stores
+      // `tx.timeBounds.maxTime`, a Unix timestamp in seconds (set in
+      // submitWithPreRegistration), not a ledger sequence number, so it must
+      // be compared against wall-clock time rather than `getLatestLedger().sequence`
+      // (which is orders of magnitude smaller and would never trip this check).
       if (tx.maxLedger != null) {
-        if (latestLedger === null) {
-          const latest = await rpcServer.getLatestLedger();
-          latestLedger = latest.sequence;
-        }
-        if (latestLedger > tx.maxLedger) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        if (nowSeconds > tx.maxLedger) {
           await prisma.transaction.update({
             where: { id: tx.id },
             data: { status: "EXPIRED" },
