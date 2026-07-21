@@ -58,6 +58,7 @@ const preRegisterSchema = {
     txHash: z.string().min(1),
     type: z.enum(["DEPOSIT", "RELEASE", "REFUND", "DISPUTE_PAYOUT"]),
     jobId: z.string().optional(),
+    milestoneId: z.string().optional(),
     maxLedger: z.number().int().positive().optional(),
     fromAddress: z.string().optional(),
     toAddress: z.string().optional(),
@@ -79,8 +80,17 @@ router.post(
   validate(preRegisterSchema),
   async (req: AuthRequest, res: Response) => {
     try {
-      const { txHash, type, jobId, maxLedger, fromAddress, toAddress, amount, tokenAddress } =
-        req.body;
+      const {
+        txHash,
+        type,
+        jobId,
+        milestoneId,
+        maxLedger,
+        fromAddress,
+        toAddress,
+        amount,
+        tokenAddress,
+      } = req.body;
 
       const record = await prisma.transaction.upsert({
         where: { txHash },
@@ -90,6 +100,7 @@ router.post(
           type,
           status: "PENDING",
           jobId: jobId ?? null,
+          milestoneId: milestoneId ?? null,
           maxLedger: maxLedger ?? null,
           fromAddress: fromAddress ?? null,
           toAddress: toAddress ?? null,
@@ -164,10 +175,15 @@ router.get(
           return res.json({ status: "FAILED", canRetry: false });
         }
 
-        // NOT_FOUND — check against maxLedger to detect expiry
+        // NOT_FOUND — check whether the transaction's timeBounds deadline has
+        // passed. `maxLedger` stores `tx.timeBounds.maxTime`, a Unix timestamp
+        // in seconds (set in submitWithPreRegistration), not a ledger sequence
+        // number — it must be compared against wall-clock time, not against
+        // `getLatestLedger().sequence` (which is orders of magnitude smaller
+        // and would never trip this check).
         if (record.maxLedger != null) {
-          const latest = await rpcServer.getLatestLedger();
-          if (latest.sequence > record.maxLedger) {
+          const nowSeconds = Math.floor(Date.now() / 1000);
+          if (nowSeconds > record.maxLedger) {
             await prisma.transaction.update({
               where: { id: record.id },
               data: { status: "EXPIRED" },

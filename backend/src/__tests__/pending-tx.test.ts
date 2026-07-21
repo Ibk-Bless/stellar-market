@@ -64,6 +64,11 @@ beforeEach(() => {
   mockGetLatestLedger.mockResolvedValue({ sequence: 1000 });
 });
 
+// `maxLedger` actually stores `tx.timeBounds.maxTime` — a Unix timestamp in
+// seconds — not a ledger sequence number (see submitWithPreRegistration).
+// Expiry must be checked against wall-clock time, not getLatestLedger().sequence.
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+
 // ── Pre-registration idempotency ──────────────────────────────────────────────
 
 describe("pre-register upsert — idempotency", () => {
@@ -92,23 +97,24 @@ describe("pre-register upsert — idempotency", () => {
 // ── Background job — EXPIRED ──────────────────────────────────────────────────
 
 describe("checkPendingTransactions", () => {
-  it("marks EXPIRED when NOT_FOUND and current ledger > maxLedger", async () => {
+  it("marks EXPIRED when NOT_FOUND and the maxTime deadline has passed", async () => {
     mockTx.findMany.mockResolvedValue([
-      { id: "tx-1", txHash: TX_HASH_A, maxLedger: 900 },
+      { id: "tx-1", txHash: TX_HASH_A, maxLedger: nowSeconds() - 100 },
     ]);
     mockGetTransaction.mockResolvedValue({ status: "NOT_FOUND" });
-    mockGetLatestLedger.mockResolvedValue({ sequence: 950 }); // 950 > 900
 
     await checkPendingTransactions();
 
     expect(mockTx.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "EXPIRED" }) }),
     );
+    // Expiry is wall-clock based — the ledger-sequence RPC call must not be used.
+    expect(mockGetLatestLedger).not.toHaveBeenCalled();
   });
 
   it("marks SUCCESS when RPC returns SUCCESS", async () => {
     mockTx.findMany.mockResolvedValue([
-      { id: "tx-2", txHash: TX_HASH_B, maxLedger: 2000 },
+      { id: "tx-2", txHash: TX_HASH_B, maxLedger: nowSeconds() + 1000 },
     ]);
     mockGetTransaction.mockResolvedValue({ status: "SUCCESS", ledger: 990 });
 
@@ -121,12 +127,11 @@ describe("checkPendingTransactions", () => {
     );
   });
 
-  it("does NOT expire when NOT_FOUND but current ledger <= maxLedger", async () => {
+  it("does NOT expire when NOT_FOUND but the maxTime deadline is still in the future", async () => {
     mockTx.findMany.mockResolvedValue([
-      { id: "tx-3", txHash: TX_HASH_A, maxLedger: 1500 },
+      { id: "tx-3", txHash: TX_HASH_A, maxLedger: nowSeconds() + 1000 },
     ]);
     mockGetTransaction.mockResolvedValue({ status: "NOT_FOUND" });
-    mockGetLatestLedger.mockResolvedValue({ sequence: 1000 }); // 1000 < 1500
 
     await checkPendingTransactions();
 
