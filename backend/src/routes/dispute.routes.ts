@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import express, { Router, Request, Response } from "express";
 import { DisputeStatus, UserRole, PrismaClient, DisputeEventType } from "@prisma/client";
 import crypto from "crypto";
 import fs from "fs";
@@ -28,7 +28,20 @@ import {
   queryDisputesSchema,
   resolveDisputeSchema,
   webhookPayloadSchema,
+  initiateEvidenceSessionSchema,
+  evidenceSessionParamSchema,
+  evidenceChunkParamSchema,
 } from "../schemas/dispute";
+import {
+  assembleAndVerify,
+  cleanupSession,
+  getReceivedChunks,
+  getSession,
+  initiateSession,
+  MAX_CHUNK_SIZE,
+  saveChunk,
+  validateInitiateInput,
+} from "../services/evidence-upload-session.service";
 
 const prisma = new PrismaClient();
 
@@ -64,6 +77,35 @@ async function assertDisputeViewerAccess(
     };
   }
 
+  return { allowed: true };
+}
+
+/**
+ * Evidence upload is participant-only (client / freelancer / initiator), unlike
+ * viewing which also admits registered voters and admins.
+ */
+async function assertDisputeParticipant(
+  disputeId: string,
+  userId: string,
+): Promise<
+  | { allowed: true }
+  | { allowed: false; status: number; error: string }
+> {
+  const dispute = await DisputeService.getDisputeById(disputeId);
+  if (!dispute) {
+    return { allowed: false, status: 404, error: "Dispute not found" };
+  }
+  const isParticipant =
+    dispute.clientId === userId ||
+    dispute.freelancerId === userId ||
+    dispute.initiatorId === userId;
+  if (!isParticipant) {
+    return {
+      allowed: false,
+      status: 403,
+      error: "Only dispute participants can upload evidence",
+    };
+  }
   return { allowed: true };
 }
 
@@ -605,6 +647,276 @@ router.post(
     }
 
     res.status(201).json({ attachments });
+  }),
+);
+
+/**
+ * Resumable / chunked evidence upload protocol.
+ *
+ * The whole multi-file batch is no longer one all-or-nothing request. Each file
+ * gets its own upload session (initiate -> upload parts -> complete), keyed
+ * deterministically by (dispute, uploader, file hash). A dropped connection
+ * therefore discards only the in-flight chunks of one file; already-completed
+ * files and already-received chunks are not re-sent. The assembled file's
+ * SHA-256 is recomputed server-side and must match the client-declared hash.
+ */
+
+/**
+ * POST /api/disputes/:id/evidence/sessions
+ * Initiate (or resume) a chunked upload session. Returns the stable sessionId
+ * and the set of chunk indexes already received, so the client can skip them.
+ */
+router.post(
+  "/:id/evidence/sessions",
+  authenticate,
+  validate({ params: disputeIdParamSchema, body: initiateEvidenceSessionSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const disputeId = req.params.id as string;
+
+    if (!isEvidenceStorageConfigured()) {
+      return res
+        .status(503)
+        .json({ error: "Evidence S3 storage is not configured" });
+    }
+
+    const access = await assertDisputeParticipant(disputeId, req.userId!);
+    if (!access.allowed) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    const body = req.body as {
+      originalName: string;
+      sha256: string;
+      size: number;
+      mimeType: string;
+      chunkSize: number;
+      totalChunks: number;
+      anchorTxHash?: string | null;
+    };
+
+    const reason = validateInitiateInput({
+      size: body.size,
+      chunkSize: body.chunkSize,
+      totalChunks: body.totalChunks,
+      sha256: body.sha256,
+    });
+    if (reason) {
+      return res.status(400).json({ error: reason });
+    }
+
+    const { sessionId, manifest, receivedChunks } = initiateSession({
+      disputeId,
+      uploaderId: req.userId!,
+      originalName: body.originalName,
+      sha256: body.sha256,
+      size: body.size,
+      mimeType: body.mimeType,
+      chunkSize: body.chunkSize,
+      totalChunks: body.totalChunks,
+      anchorTxHash: body.anchorTxHash ?? null,
+      createdAt: new Date().toISOString(),
+    });
+
+    res.status(200).json({
+      sessionId,
+      totalChunks: manifest.totalChunks,
+      receivedChunks,
+    });
+  }),
+);
+
+/**
+ * GET /api/disputes/:id/evidence/sessions/:sessionId
+ * Status of an in-flight session (which chunks are already on the server).
+ */
+router.get(
+  "/:id/evidence/sessions/:sessionId",
+  authenticate,
+  validate({ params: evidenceSessionParamSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { sessionId } = req.params as unknown as { sessionId: string };
+    const manifest = getSession(sessionId);
+    if (!manifest) {
+      return res.status(404).json({ error: "Upload session not found" });
+    }
+    return res.status(200).json({
+      sessionId,
+      totalChunks: manifest.totalChunks,
+      receivedChunks: getReceivedChunks(sessionId),
+    });
+  }),
+);
+
+/**
+ * PUT /api/disputes/:id/evidence/sessions/:sessionId/chunks/:index
+ * Upload a single chunk (raw binary body). Idempotent: re-sending an already
+ * received chunk is accepted and is a no-op.
+ */
+router.put(
+  "/:id/evidence/sessions/:sessionId/chunks/:index",
+  authenticate,
+  validate({ params: evidenceChunkParamSchema }),
+  express.raw({ type: "application/octet-stream", limit: MAX_CHUNK_SIZE + 1024 }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { sessionId, index } = req.params as unknown as {
+      sessionId: string;
+      index: string;
+    };
+
+    const manifest = getSession(sessionId);
+    if (!manifest) {
+      return res.status(404).json({ error: "Upload session not found" });
+    }
+
+    const access = await assertDisputeParticipant(
+      manifest.disputeId,
+      req.userId!,
+    );
+    if (!access.allowed) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(400).json({ error: "Chunk body is required" });
+    }
+
+    let receivedChunks: number[];
+    try {
+      ({ receivedChunks } = saveChunk(sessionId, Number(index), req.body));
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to store chunk";
+      return res.status(400).json({ error: message });
+    }
+
+    return res.status(200).json({ sessionId, index: Number(index), receivedChunks });
+  }),
+);
+
+/**
+ * POST /api/disputes/:id/evidence/sessions/:sessionId/complete
+ * Assemble the chunks, verify the SHA-256, validate MIME type, store to S3, and
+ * record the attachment. Aborts the session on hash mismatch or validation
+ * failure so a corrupted resume can never be recorded as intact.
+ */
+router.post(
+  "/:id/evidence/sessions/:sessionId/complete",
+  authenticate,
+  validate({ params: evidenceSessionParamSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { sessionId } = req.params as unknown as { sessionId: string };
+    const manifest = getSession(sessionId);
+    if (!manifest) {
+      return res.status(404).json({ error: "Upload session not found" });
+    }
+
+    const access = await assertDisputeParticipant(
+      manifest.disputeId,
+      req.userId!,
+    );
+    if (!access.allowed) {
+      return res.status(access.status).json({ error: access.error });
+    }
+
+    let assembled;
+    try {
+      assembled = assembleAndVerify(sessionId);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to assemble file";
+      return res.status(400).json({ error: message });
+    }
+
+    if (!assembled.verified) {
+      cleanupSession(sessionId);
+      return res.status(422).json({
+        error:
+          "Integrity check failed: server-computed hash does not match the declared hash",
+        computedSha256: assembled.computedSha256,
+        declaredSha256: manifest.sha256,
+      });
+    }
+
+    const validation = await validateFileMimeType(assembled.filePath);
+    if (!validation.valid) {
+      cleanupSession(sessionId);
+      return res.status(415).json({
+        error: validation.error || "Unsupported file type",
+      });
+    }
+
+    const storageKey = `disputes/${manifest.disputeId}/${sessionId}`;
+    try {
+      await uploadEvidenceObject({
+        key: storageKey,
+        filePath: assembled.filePath,
+        contentType: validation.detectedType || manifest.mimeType,
+      });
+    } finally {
+      // The assembled file exists only while validating + uploading it.
+      cleanupSession(sessionId);
+    }
+
+    const candidateAnchorTx = manifest.anchorTxHash || null;
+    if (candidateAnchorTx) {
+      const txExists = await verifyAnchorTxOnHorizon(candidateAnchorTx);
+      if (!txExists) {
+        return res.status(422).json({ error: "Anchor transaction not found" });
+      }
+    }
+
+    const attachment = await prisma.attachment.create({
+      data: {
+        uploaderId: req.userId!,
+        disputeId: manifest.disputeId,
+        filename: storageKey,
+        originalName: manifest.originalName,
+        mimeType: validation.detectedType || manifest.mimeType,
+        size: manifest.size,
+        url: `s3://${config.evidenceStorage.bucket}/${storageKey}`,
+        sha256: assembled.computedSha256,
+        anchorTxHash: candidateAnchorTx,
+      },
+    });
+
+    await recordDisputeEvent(
+      manifest.disputeId,
+      DisputeEventType.EVIDENCE_SUBMITTED,
+      { fileCount: 1, uploaderId: req.userId, originalName: manifest.originalName },
+    );
+
+    return res.status(201).json({
+      attachment: {
+        ...attachment,
+        sizeFormatted: formatFileSize(attachment.size),
+      },
+    });
+  }),
+);
+
+/**
+ * DELETE /api/disputes/:id/evidence/sessions/:sessionId
+ * Abort an in-flight session and discard its partial chunks.
+ */
+router.delete(
+  "/:id/evidence/sessions/:sessionId",
+  authenticate,
+  validate({ params: evidenceSessionParamSchema }),
+  asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { sessionId } = req.params as unknown as { sessionId: string };
+    const manifest = getSession(sessionId);
+    if (!manifest) {
+      return res.status(404).json({ error: "Upload session not found" });
+    }
+    const access = await assertDisputeParticipant(
+      manifest.disputeId,
+      req.userId!,
+    );
+    if (!access.allowed) {
+      return res.status(access.status).json({ error: access.error });
+    }
+    cleanupSession(sessionId);
+    return res.status(200).json({ sessionId, aborted: true });
   }),
 );
 

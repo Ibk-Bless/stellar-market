@@ -12,6 +12,39 @@ export const disputeIdParamSchema = z.object({
   id: z.string().min(1, { message: "Dispute ID is required" }),
 });
 
+// ---- Chunked / resumable evidence upload ----
+
+const sha256Hex = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/, { message: "sha256 must be a 64-character hex digest" });
+
+export const initiateEvidenceSessionSchema = z.object({
+  originalName: z.string().min(1).max(255),
+  sha256: sha256Hex,
+  size: z.number().int().nonnegative(),
+  mimeType: z.string().min(1).max(255),
+  chunkSize: z.number().int().positive(),
+  totalChunks: z.number().int().positive(),
+  anchorTxHash: z.string().min(1).max(128).optional().nullable(),
+});
+
+export const evidenceSessionParamSchema = z.object({
+  id: z.string().min(1, { message: "Dispute ID is required" }),
+  sessionId: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/, { message: "Invalid session id" }),
+});
+
+export const evidenceChunkParamSchema = z.object({
+  id: z.string().min(1, { message: "Dispute ID is required" }),
+  sessionId: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/, { message: "Invalid session id" }),
+  index: z
+    .string()
+    .regex(/^\d+$/, { message: "Chunk index must be a non-negative integer" }),
+});
+
 export const initRaiseDisputeSchema = z.object({
   jobId: z.string().min(1, { message: "Job ID is required" }),
   reason: z
