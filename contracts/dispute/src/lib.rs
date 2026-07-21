@@ -420,6 +420,14 @@ fn bump_evidence_ttl(env: &Env, dispute_id: u64) {
     );
 }
 
+fn bump_pending_resolution_ttl(env: &Env, dispute_id: u64) {
+    env.storage().persistent().extend_ttl(
+        &DataKey::PendingResolution(dispute_id),
+        MIN_TTL_THRESHOLD,
+        MIN_TTL_EXTEND_TO,
+    );
+}
+
 /// Creates a default (zeroed) DisputeTally for a new dispute.
 fn new_tally() -> DisputeTally {
     DisputeTally {
@@ -1573,6 +1581,7 @@ impl DisputeContract {
                 env.storage()
                     .persistent()
                     .set(&DataKey::PendingResolution(ap.dispute_id), &resolution);
+                bump_pending_resolution_ttl(&env, ap.dispute_id);
                 env.storage()
                     .persistent()
                     .set(&DataKey::Dispute(ap.dispute_id), &dispute);
@@ -2068,6 +2077,7 @@ impl DisputeContract {
             .persistent()
             .get(&DataKey::PendingResolution(dispute_id))
             .ok_or(DisputeError::DisputeNotFound)?;
+        bump_pending_resolution_ttl(&env, dispute_id);
 
         let escrow_addr: Address = env
             .storage()
@@ -2222,6 +2232,7 @@ fn internal_resolve(
             env.storage()
                 .persistent()
                 .set(&DataKey::PendingResolution(dispute_id), &DisputeResolution::MaliciousFiling);
+            bump_pending_resolution_ttl(env, dispute_id);
             env.storage()
                 .persistent()
                 .set(&DataKey::Dispute(dispute_id), &*dispute);
@@ -2365,6 +2376,7 @@ fn internal_resolve(
             env.storage()
                 .persistent()
                 .set(&DataKey::PendingResolution(dispute_id), &resolution);
+            bump_pending_resolution_ttl(env, dispute_id);
             env.storage()
                 .persistent()
                 .set(&DataKey::Dispute(dispute_id), &*dispute);
