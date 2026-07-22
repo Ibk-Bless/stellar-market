@@ -61,7 +61,7 @@ export function getNotificationPriority(type: NotificationType): NotificationPri
 let worker: Worker<NotificationJobData, any, string> | null = null;
 
 export function startNotificationWorker(
-  getSocketEmitter: (userId: string) => boolean,
+  getSocketEmitter: (userId: string) => boolean | Promise<boolean>,
   emitToUser: (userId: string, event: string, data: unknown) => void,
 ) {
   worker = new Worker<NotificationJobData, any, string>(
@@ -109,7 +109,7 @@ export function startNotificationWorker(
         throw error;
       }
 
-      const isOnline = getSocketEmitter(userId);
+      const isOnline = await getSocketEmitter(userId);
       if (isOnline) {
         const notification = await prisma.notification.findUnique({
           where: { id: notificationId },
