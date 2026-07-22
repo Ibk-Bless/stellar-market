@@ -474,52 +474,164 @@ router.post(
   })
 );
 
+// Maps each confirm-tx type to the escrow contract function that must have been called.
+const EXPECTED_CONTRACT_FN: Record<string, string> = {
+  CREATE_JOB: "create_job",
+  FUND_JOB: "fund_job",
+  EXTEND_DEADLINE: "extend_deadline",
+  SUBMIT_MILESTONE: "submit_milestone",
+  APPROVE_MILESTONE: "approve_milestone",
+  PROPOSE_REVISION: "propose_revision",
+  ACCEPT_REVISION: "accept_revision",
+  REJECT_REVISION: "reject_revision",
+  CANCEL_JOB: "cancel_job",
+  CLAIM_REFUND: "claim_refund",
+};
+
 /**
  * Confirm transaction and update local database.
- * In a real app, this should ideally be handled by an event listener/indexer,
- * but for this integration task, we verify the hash provided by the frontend.
+ * Decodes the actual on-chain contract invocation from the transaction envelope
+ * before applying any state change, and enforces per-job authorization for every
+ * operation type.
  */
 router.post("/confirm-tx", authenticate, idempotency(), asyncHandler(async (req: AuthRequest, res: Response) => {
-  const { hash, type, jobId, milestoneId, onChainJobId } = req.body;
+  const { hash, type, jobId, milestoneId, onChainJobId, newDeadline } = req.body;
 
-  const verification = await ContractService.verifyTransaction(hash);
-  if (!verification.success) {
-    return res.status(400).json({ error: `Transaction failed or not found: ${verification.error}` });
+  // ── 1. Decode on-chain effects ────────────────────────────────────────────
+  const effects = await ContractService.verifyTransactionEffects(hash);
+  if (!effects.success) {
+    return res.status(400).json({ error: `Transaction verification failed: ${effects.error}` });
   }
 
-  // Update DB based on transaction type
-  if (type === "CREATE_JOB" && jobId && onChainJobId) {
-    await prisma.job.update({
-      where: { id: jobId },
-      data: {
-        contractJobId: onChainJobId.toString(),
-        escrowStatus: EscrowStatus.UNFUNDED
-      }
-    });
+  // ── 2. Contract address must be the configured escrow contract ────────────
+  if (effects.contractId && effects.contractId !== config.stellar.escrowContractId) {
+    return res.status(403).json({ error: "Transaction invoked an unexpected contract" });
+  }
 
-    // Update milestones with their on-chain indices (0, 1, 2...)
-    const milestones = await prisma.milestone.findMany({
-      where: { jobId },
-      orderBy: { order: "asc" }
+  // ── 3. Function name must match the declared type ─────────────────────────
+  const expectedFn = EXPECTED_CONTRACT_FN[type];
+  if (expectedFn && effects.functionName && effects.functionName !== expectedFn) {
+    return res.status(403).json({
+      error: `Transaction called "${effects.functionName}" but type "${type}" requires "${expectedFn}"`,
     });
-    for (let i = 0; i < milestones.length; i++) {
-      await prisma.milestone.update({
-        where: { id: milestones[i].id },
-        data: { onChainIndex: i }
+  }
+
+  // ── 4. Source account must match the authenticated user's wallet ──────────
+  if (effects.sourceAccount) {
+    const caller = await prisma.user.findUnique({
+      where: { id: req.userId! },
+      select: { walletAddress: true },
+    });
+    if (caller?.walletAddress && effects.sourceAccount !== caller.walletAddress) {
+      return res.status(403).json({
+        error: "Transaction source account does not match your registered wallet",
       });
     }
-  } else if (type === "FUND_JOB" && jobId) {
+  }
+
+  // ── 5. Load job (and milestone) for authorization + arg checks ────────────
+  // For milestone-only types the job is fetched through the milestone relation.
+  type JobRow = {
+    id: string;
+    clientId: string;
+    freelancerId: string | null;
+    contractJobId: string | null;
+    client: { walletAddress: string | null };
+    freelancer: { walletAddress: string | null } | null;
+  };
+
+  let job: JobRow | null = null;
+  let milestone: { id: string; onChainIndex: number | null; jobId: string | null } | null = null;
+
+  if (milestoneId) {
+    const ms = await prisma.milestone.findUnique({
+      where: { id: milestoneId },
+      include: { job: { include: { client: true, freelancer: true } } },
+    });
+    if (!ms) return res.status(404).json({ error: "Milestone not found" });
+    milestone = { id: ms.id, onChainIndex: ms.onChainIndex, jobId: ms.jobId };
+    job = ms.job as unknown as JobRow;
+  } else if (jobId) {
+    job = await prisma.job.findUnique({
+      where: { id: jobId },
+      include: { client: true, freelancer: true },
+    }) as JobRow | null;
+  }
+
+  if (!job) return res.status(404).json({ error: "Job not found" });
+
+  const args = effects.args ?? [];
+
+  // ── 6. Per-type: authorization + arg validation + DB write ────────────────
+
+  if (type === "CREATE_JOB" && jobId && onChainJobId) {
+    if (job.clientId !== req.userId) {
+      return res.status(403).json({ error: "Only the client can confirm job creation" });
+    }
+    // Args: (client: Address, freelancer: Address, token: Address, milestones: vec, deadline: u64)
+    const argClient = args[0] !== undefined ? String(args[0]) : undefined;
+    const argFreelancer = args[1] !== undefined ? String(args[1]) : undefined;
+    if (argClient && job.client?.walletAddress && argClient !== job.client.walletAddress) {
+      return res.status(403).json({ error: "Transaction client address does not match this job" });
+    }
+    if (argFreelancer && job.freelancer?.walletAddress && argFreelancer !== job.freelancer.walletAddress) {
+      return res.status(403).json({ error: "Transaction freelancer address does not match this job" });
+    }
+
     await prisma.job.update({
       where: { id: jobId },
-      data: { escrowStatus: EscrowStatus.FUNDED }
+      data: { contractJobId: onChainJobId.toString(), escrowStatus: EscrowStatus.UNFUNDED },
     });
+    const milestones = await prisma.milestone.findMany({ where: { jobId }, orderBy: { order: "asc" } });
+    for (let i = 0; i < milestones.length; i++) {
+      await prisma.milestone.update({ where: { id: milestones[i].id }, data: { onChainIndex: i } });
+    }
+
+  } else if (type === "FUND_JOB" && jobId) {
+    if (job.clientId !== req.userId) {
+      return res.status(403).json({ error: "Only the client can confirm job funding" });
+    }
+    // Args: (job_id: u64, client: Address, agreed_value_stroops: i128, max_slippage_bps: u32)
+    const argJobId = args[0] !== undefined ? String(args[0]) : undefined;
+    if (argJobId && job.contractJobId && argJobId !== job.contractJobId) {
+      return res.status(403).json({ error: "Transaction job ID does not match this job" });
+    }
+
+    await prisma.job.update({ where: { id: jobId }, data: { escrowStatus: EscrowStatus.FUNDED } });
+
   } else if (type === "EXTEND_DEADLINE" && milestoneId) {
-    const { newDeadline } = req.body;
+    if (job.clientId !== req.userId) {
+      return res.status(403).json({ error: "Only the client can confirm a deadline extension" });
+    }
+    // Args: (job_id: u64, milestone_index: u32, new_deadline: u64)
+    const argJobId = args[0] !== undefined ? String(args[0]) : undefined;
+    const argMilestoneIdx = args[1] !== undefined ? Number(args[1]) : undefined;
+    if (argJobId && job.contractJobId && argJobId !== job.contractJobId) {
+      return res.status(403).json({ error: "Transaction job ID does not match this job" });
+    }
+    if (argMilestoneIdx !== undefined && milestone?.onChainIndex !== null && milestone?.onChainIndex !== undefined && argMilestoneIdx !== milestone.onChainIndex) {
+      return res.status(403).json({ error: "Transaction milestone index does not match this milestone" });
+    }
+
     await prisma.milestone.update({
       where: { id: milestoneId },
       data: { contractDeadline: new Date(newDeadline) },
     });
+
   } else if (type === "SUBMIT_MILESTONE" && milestoneId) {
+    if (job.freelancerId !== req.userId) {
+      return res.status(403).json({ error: "Only the freelancer can confirm milestone submission" });
+    }
+    // Args: (job_id: u64, milestone_index: u32, freelancer: Address)
+    const argJobId = args[0] !== undefined ? String(args[0]) : undefined;
+    const argMilestoneIdx = args[1] !== undefined ? Number(args[1]) : undefined;
+    if (argJobId && job.contractJobId && argJobId !== job.contractJobId) {
+      return res.status(403).json({ error: "Transaction job ID does not match this job" });
+    }
+    if (argMilestoneIdx !== undefined && milestone?.onChainIndex !== null && milestone?.onChainIndex !== undefined && argMilestoneIdx !== milestone.onChainIndex) {
+      return res.status(403).json({ error: "Transaction milestone index does not match this milestone" });
+    }
+
     let affectedJobId: string | null = null;
     await prisma.$transaction(async (tx) => {
       const updatedMilestone = await tx.milestone.update({
@@ -527,10 +639,8 @@ router.post("/confirm-tx", authenticate, idempotency(), asyncHandler(async (req:
         data: { status: "SUBMITTED" },
         include: { job: true },
       });
-
       if (!updatedMilestone.jobId) return;
       affectedJobId = updatedMilestone.jobId;
-
       await NotificationService.sendNotification({
         userId: updatedMilestone.job.clientId,
         type: NotificationType.MILESTONE_SUBMITTED,
@@ -544,35 +654,37 @@ router.post("/confirm-tx", authenticate, idempotency(), asyncHandler(async (req:
       await invalidateCacheKey(generateJobOnChainStatusCacheKey(affectedJobId));
       await invalidateCacheKey(generateJobCacheKey(affectedJobId));
     }
+
   } else if (type === "APPROVE_MILESTONE" && milestoneId) {
+    if (job.clientId !== req.userId) {
+      return res.status(403).json({ error: "Only the client can confirm milestone approval" });
+    }
+    // Args: (job_id: u64, milestone_index: u32, ...)
+    const argJobId = args[0] !== undefined ? String(args[0]) : undefined;
+    const argMilestoneIdx = args[1] !== undefined ? Number(args[1]) : undefined;
+    if (argJobId && job.contractJobId && argJobId !== job.contractJobId) {
+      return res.status(403).json({ error: "Transaction job ID does not match this job" });
+    }
+    if (argMilestoneIdx !== undefined && milestone?.onChainIndex !== null && milestone?.onChainIndex !== undefined && argMilestoneIdx !== milestone.onChainIndex) {
+      return res.status(403).json({ error: "Transaction milestone index does not match this milestone" });
+    }
+
     let affectedJobId: string | null = null;
     await prisma.$transaction(async (tx) => {
-      // Step 1: Update milestone status
       const updatedMilestone = await tx.milestone.update({
         where: { id: milestoneId },
         data: { status: "APPROVED" },
-        include: { job: true }
+        include: { job: true },
       });
-
       if (!updatedMilestone.jobId) return;
       affectedJobId = updatedMilestone.jobId;
-
-      // Step 2: Check if all milestones are approved to update job status
-      const allMilestones = await tx.milestone.findMany({ 
-        where: { jobId: updatedMilestone.jobId } 
-      });
-
+      const allMilestones = await tx.milestone.findMany({ where: { jobId: updatedMilestone.jobId } });
       if (allMilestones.every(m => m.status === "APPROVED")) {
         await tx.job.update({
           where: { id: updatedMilestone.jobId },
-          data: {
-            status: "COMPLETED",
-            escrowStatus: EscrowStatus.COMPLETED
-          }
+          data: { status: "COMPLETED", escrowStatus: EscrowStatus.COMPLETED },
         });
       }
-
-      // Step 3: Notify the freelancer (inside transaction for consistency)
       if (updatedMilestone.job.freelancerId) {
         await NotificationService.sendNotification({
           userId: updatedMilestone.job.freelancerId,
@@ -588,29 +700,44 @@ router.post("/confirm-tx", authenticate, idempotency(), asyncHandler(async (req:
       await invalidateCacheKey(generateJobOnChainStatusCacheKey(affectedJobId));
       await invalidateCacheKey(generateJobCacheKey(affectedJobId));
     }
+
   } else if (type === "PROPOSE_REVISION" && jobId) {
+    if (job.clientId !== req.userId && job.freelancerId !== req.userId) {
+      return res.status(403).json({ error: "Only the client or freelancer can confirm a revision proposal" });
+    }
     await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
     await invalidateCacheKey(generateJobCacheKey(jobId));
+
   } else if (type === "ACCEPT_REVISION" && jobId) {
-    const job = await prisma.job.findUnique({
-      where: { id: jobId },
-      select: { contractJobId: true },
-    });
-    if (job?.contractJobId) {
+    if (job.clientId !== req.userId && job.freelancerId !== req.userId) {
+      return res.status(403).json({ error: "Only the client or freelancer can confirm revision acceptance" });
+    }
+    if (job.contractJobId) {
       await ContractService.syncJobFromChain(prisma, jobId, job.contractJobId);
     }
     await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
     await invalidateCacheKey(generateJobCacheKey(jobId));
+
   } else if (type === "REJECT_REVISION" && jobId) {
+    if (job.clientId !== req.userId && job.freelancerId !== req.userId) {
+      return res.status(403).json({ error: "Only the client or freelancer can confirm revision rejection" });
+    }
     await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
     await invalidateCacheKey(generateJobCacheKey(jobId));
+
   } else if ((type === "CANCEL_JOB" || type === "CLAIM_REFUND") && jobId) {
+    if (job.clientId !== req.userId) {
+      return res.status(403).json({ error: "Only the client can confirm job cancellation or refund" });
+    }
+    // Args: (job_id: u64, client: Address)
+    const argJobId = args[0] !== undefined ? String(args[0]) : undefined;
+    if (argJobId && job.contractJobId && argJobId !== job.contractJobId) {
+      return res.status(403).json({ error: "Transaction job ID does not match this job" });
+    }
+
     await prisma.job.update({
       where: { id: jobId },
-      data: {
-        status: "CANCELLED",
-        escrowStatus: EscrowStatus.CANCELLED,
-      },
+      data: { status: "CANCELLED", escrowStatus: EscrowStatus.CANCELLED },
     });
     await invalidateCacheKey(generateJobOnChainStatusCacheKey(jobId));
     await invalidateCacheKey(generateJobCacheKey(jobId));
