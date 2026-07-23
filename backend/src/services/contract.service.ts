@@ -3,6 +3,7 @@ import {
   Contract,
   rpc,
   scValToNative,
+  StrKey,
   TransactionBuilder,
   xdr,
   nativeToScVal,
@@ -384,15 +385,93 @@ export class ContractService {
 
   /**
    * Verification function to check transaction status on-chain.
+   * @deprecated Use verifyTransactionEffects for security-sensitive paths.
    */
   static async verifyTransaction(hash: string) {
     const server = getRpcServer();
     const response = await server.getTransaction(hash);
     if (response.status === rpc.Api.GetTransactionStatus.SUCCESS) {
-        // Extract results if needed
         return { success: true, result: response.resultXdr };
     }
     return { success: false, error: response.status };
+  }
+
+  /**
+   * Verifies a transaction succeeded on-chain AND decodes what it actually did:
+   * which contract was called, which function, with what arguments, and from
+   * which source account. Used by confirm-tx to reject spoofed hash submissions.
+   */
+  static async verifyTransactionEffects(hash: string): Promise<{
+    success: boolean;
+    error?: string;
+    contractId?: string;
+    functionName?: string;
+    args?: unknown[];
+    sourceAccount?: string;
+  }> {
+    const server = getRpcServer();
+    const response = await server.getTransaction(hash);
+
+    if (response.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+      return { success: false, error: String(response.status) };
+    }
+
+    try {
+      const envelope = (response as rpc.Api.GetSuccessfulTransactionResponse).envelopeXdr;
+      const txBody = envelope.v1().tx();
+
+      // Decode source account (handles both ed25519 and muxed)
+      let sourceAccount: string | undefined;
+      try {
+        const src = txBody.sourceAccount();
+        const switchName = src.switch().name;
+        if (switchName === "keyTypeEd25519") {
+          sourceAccount = StrKey.encodeEd25519PublicKey(src.ed25519());
+        } else if (switchName === "keyTypeMuxedEd25519") {
+          sourceAccount = StrKey.encodeEd25519PublicKey(src.med25519().ed25519());
+        }
+      } catch {
+        // ignore — sourceAccount stays undefined
+      }
+
+      // Find the first invokeHostFunction operation.
+      // The stellar-base XDR bindings type union arm accessors as static factories,
+      // so we cast to access the instance getter.
+      for (const op of txBody.operations()) {
+        const body = op.body();
+        if (body.switch().name !== "invokeHostFunction") continue;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const hostFn = (body as any).invokeHostFunction().hostFunction();
+        if (hostFn.switch().name !== "hostFunctionTypeInvokeContract") continue;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const invokeArgs = (hostFn as any).invokeContract();
+        let contractId: string | undefined;
+        try {
+          contractId = Address.fromScAddress(invokeArgs.contractAddress()).toString();
+        } catch {
+          contractId = undefined;
+        }
+        const functionName = invokeArgs.functionName().toString();
+        const args: unknown[] = invokeArgs.args().map((a: xdr.ScVal) => {
+          try { return scValToNative(a); } catch { return undefined; }
+        });
+
+        return { success: true, contractId, functionName, args, sourceAccount };
+      }
+
+      // Transaction succeeded but contains no Soroban contract invocation
+      return {
+        success: false,
+        error: "Transaction contains no contract invocation — cannot verify escrow effects",
+      };
+    } catch (err) {
+      logger.warn({ err, hash }, "[ContractService] Failed to decode transaction envelope");
+      return {
+        success: false,
+        error: "Could not decode transaction envelope",
+      };
+    }
   }
 
   /**
