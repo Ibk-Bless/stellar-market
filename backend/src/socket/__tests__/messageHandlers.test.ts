@@ -14,6 +14,13 @@ jest.mock("../../lib/notification-queue", () => ({
   getNotificationPriority: jest.fn().mockReturnValue(4),
 }));
 
+// ─── Redis mock (socket/index.ts now needs a client for the redis adapter and
+// presence registry; the fake supports the pub/sub + KV surface both use) ────
+jest.mock("../../lib/redis", () => {
+  const { FakeRedisBus, mockRedisModule } = require("../../lib/__tests__/testUtils/fakeRedis");
+  return mockRedisModule(new FakeRedisBus());
+});
+
 // ─── Prisma mock ─────────────────────────────────────────────────────────────
 jest.mock("@prisma/client", () => {
   const mockPrisma = {

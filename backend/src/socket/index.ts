@@ -1,11 +1,19 @@
 import { Server as HttpServer } from "http";
 import { Server as SocketServer, Socket } from "socket.io";
+import { createAdapter } from "@socket.io/redis-adapter";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { config } from "../config";
 import { registerMessageHandlers } from "./messageHandlers";
 import { logger } from "../lib/logger";
 import { startNotificationWorker } from "../lib/notification-queue";
+import RedisClient from "../lib/redis";
+import {
+  isUserOnline as isUserOnlineInRegistry,
+  markSocketOnline,
+  markSocketOffline,
+  startPresenceHeartbeat,
+} from "../lib/presence";
 
 const prisma = new PrismaClient();
 
@@ -17,12 +25,8 @@ export interface AuthenticatedSocket extends Socket {
 
 let io: SocketServer;
 
-const userSocketMap = new Map<string, string>();
-
-export function isUserOnline(userId: string): boolean {
-  const socketId = userSocketMap.get(userId);
-  if (!socketId) return false;
-  return io?.sockets.sockets.has(socketId) ?? false;
+export function isUserOnline(userId: string): Promise<boolean> {
+  return isUserOnlineInRegistry(userId);
 }
 
 export function emitToUser(userId: string, event: string, data: unknown): void {
@@ -54,12 +58,16 @@ async function deliverPendingNotifications(socket: AuthenticatedSocket, userId: 
 }
 
 export function initSocket(httpServer: HttpServer): SocketServer {
+  const pubClient = RedisClient.getInstance();
+  const subClient = pubClient.duplicate();
+
   io = new SocketServer(httpServer, {
     cors: {
       origin: config.frontendUrl,
       methods: ["GET", "POST"],
       credentials: true,
     },
+    adapter: createAdapter(pubClient, subClient),
   });
 
   // JWT auth middleware — runs before every connection
@@ -84,7 +92,11 @@ export function initSocket(httpServer: HttpServer): SocketServer {
     const userId = authedSocket.data.userId;
     const joinedRooms = new Set<string>();
 
-    userSocketMap.set(userId, socket.id);
+    void markSocketOnline(userId, socket.id).catch((err) => {
+      logger.error({ err, userId, socketId: socket.id }, "Failed to record presence on connect");
+    });
+    const heartbeat = startPresenceHeartbeat(userId, socket.id);
+
     socket.join(`user:${userId}`);
     joinedRooms.add(`user:${userId}`);
     logger.info({ userId, socketId: socket.id }, "Socket connected");
@@ -94,7 +106,10 @@ export function initSocket(httpServer: HttpServer): SocketServer {
     registerMessageHandlers(io, authedSocket);
 
     socket.on("disconnect", () => {
-      userSocketMap.delete(userId);
+      clearInterval(heartbeat);
+      void markSocketOffline(userId, socket.id).catch((err) => {
+        logger.error({ err, userId, socketId: socket.id }, "Failed to clear presence on disconnect");
+      });
       for (const room of joinedRooms) {
         socket.leave(room);
       }
