@@ -170,7 +170,7 @@ const EarningsPage = () => {
   // avoid clutter while keeping the moving-average line readable.
   const isNarrow = useMediaQuery("(max-width: 374px)");
 
-  const fetchEarnings = useCallback(async () => {
+  const fetchEarnings = useCallback(async (signal?: AbortSignal) => {
     if (!user) return;
 
     setLoading(true);
@@ -184,7 +184,7 @@ const EarningsPage = () => {
 
       const response = await axios.get<EarningsResponse>(
         `${API}/freelancers/earnings?${params.toString()}`,
-        { headers: authHeader() },
+        { headers: authHeader(), signal },
       );
 
       setSummary(response.data.summary);
@@ -193,6 +193,7 @@ const EarningsPage = () => {
       setTransactions(response.data.transactions);
       setTotalPages(response.data.pagination.totalPages);
     } catch (err) {
+      if (axios.isCancel(err)) return;
       if (axios.isAxiosError(err) && err.response?.status === 403) {
         setError("Only freelancers can access this page.");
       } else {
@@ -203,7 +204,7 @@ const EarningsPage = () => {
     }
   }, [user, currentPage, range.from, range.to]);
 
-  const fetchReconciliation = useCallback(async () => {
+  const fetchReconciliation = useCallback(async (signal?: AbortSignal) => {
     if (!user) return;
     setReconciling(true);
     try {
@@ -213,11 +214,11 @@ const EarningsPage = () => {
       const params = new URLSearchParams(rawReconcileParams);
       const response = await axios.get<ReconcileResponse>(
         `${API}/freelancers/earnings/reconcile?${params.toString()}`,
-        { headers: authHeader() },
+        { headers: authHeader(), signal },
       );
       setReconcile(response.data);
-    } catch {
-      // Reconciliation is best-effort; the chart/table still render without it.
+    } catch (err) {
+      if (axios.isCancel(err)) return;
       setReconcile(null);
     } finally {
       setReconciling(false);
@@ -225,11 +226,15 @@ const EarningsPage = () => {
   }, [user, range.from, range.to]);
 
   useEffect(() => {
-    fetchEarnings();
+    const controller = new AbortController();
+    fetchEarnings(controller.signal);
+    return () => controller.abort();
   }, [fetchEarnings]);
 
   useEffect(() => {
-    fetchReconciliation();
+    const controller = new AbortController();
+    fetchReconciliation(controller.signal);
+    return () => controller.abort();
   }, [fetchReconciliation]);
 
   // Reset to page 1 whenever the range changes.

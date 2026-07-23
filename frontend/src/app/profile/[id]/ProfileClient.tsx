@@ -87,7 +87,7 @@ export default function ProfileClient() {
     queryKey: ["badgeTiers"],
     queryFn: async () => {
       const res = await axios.get<PlatformConfig>(`${API_URL}/platform/config`);
-      return res.data.badgeTiers;
+      return res.data.badgeTiers ?? DEFAULT_BADGE_TIERS;
     },
     staleTime: 3_600_000,
     placeholderData: DEFAULT_BADGE_TIERS,

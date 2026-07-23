@@ -96,7 +96,7 @@ describe("ClientEarningsPage", () => {
 
   it("shows an error message when the request fails with 403", async () => {
     mockedAxios.get.mockRejectedValue({ isAxiosError: true, response: { status: 403 } });
-    (mockedAxios.isAxiosError as jest.Mock).mockReturnValue(true);
+    (mockedAxios.isAxiosError as unknown as jest.Mock).mockReturnValue(true);
 
     render(<ClientEarningsPage />);
 

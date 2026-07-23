@@ -1,4 +1,5 @@
 import { middleware } from "@/middleware";
+import type { NextRequest } from "next/server";
 
 // Mock next/server
 jest.mock("next/server", () => {
@@ -16,7 +17,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/" },
       cookies: { get: () => undefined },
       url: "http://localhost:3000/",
-    } as unknown;
+    } as unknown as NextRequest;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBeUndefined();
@@ -27,7 +28,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/" },
       cookies: { get: () => ({ value: "fake-token" }) },
       url: "http://localhost:3000/",
-    } as unknown;
+    } as unknown as NextRequest;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBeUndefined();
@@ -38,7 +39,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/dashboard" },
       cookies: { get: () => undefined },
       url: "http://localhost:3000/dashboard",
-    } as unknown;
+    } as unknown as NextRequest;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBe("http://localhost:3000/auth/login");
@@ -49,7 +50,7 @@ describe("Middleware Routing", () => {
       nextUrl: { pathname: "/auth/login" },
       cookies: { get: () => ({ value: "fake-token" }) },
       url: "http://localhost:3000/auth/login",
-    } as unknown;
+    } as unknown as NextRequest;
     
     const res = middleware(req);
     expect(res.headers.get("Location")).toBe("http://localhost:3000/dashboard");

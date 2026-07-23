@@ -1,0 +1,267 @@
+import "fake-indexeddb/auto";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import "@testing-library/jest-dom";
+import EvidenceUpload from "@/components/EvidenceUpload";
+import {
+  CHUNK_SIZE,
+  uploadFileResumable,
+} from "@/lib/evidenceUpload";
+
+jest.setTimeout(30000);
+
+// ---- In-memory mock of the backend chunked upload protocol ----
+// Tracks, per session id, which chunk indexes were actually received. A network
+// failure is simulated by throwing on a chunk PUT before it lands server-side.
+function makeBackend() {
+  const sessions = new Map<
+    string,
+    { totalChunks: number; received: Set<number>; sha256: string; size: number }
+  >();
+
+  function deriveSessionId(disputeId: string, uploaderId: string, sha256: string): string {
+    let h = 0;
+    const s = `${disputeId}:${uploaderId}:${sha256}`;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h.toString(16).padStart(64, "0");
+  }
+
+  let failPredicate: ((sessionId: string, index: number) => boolean) | null =
+    null;
+  let chunkPutCalls = 0;
+
+  return {
+    sessions,
+    getChunkPutCalls: () => chunkPutCalls,
+    failWhen(predicate: (sessionId: string, index: number) => boolean) {
+      failPredicate = predicate;
+    },
+    resetFail() {
+      failPredicate = null;
+    },
+    async handle(url: string, init: any): Promise<any> {
+      const method = (init?.method || "GET").toUpperCase();
+      const chunkMatch = url.match(
+        /\/evidence\/sessions\/([^/]+)\/chunks\/(\d+)$/,
+      );
+
+      // INITIATE
+      if (method === "POST" && url.endsWith("/evidence/sessions")) {
+        const json = JSON.parse(init.body);
+        const sessionId = deriveSessionId("dispute-1", "client-1", json.sha256);
+        if (!sessions.has(sessionId)) {
+          sessions.set(sessionId, {
+            totalChunks: json.totalChunks,
+            received: new Set(),
+            sha256: json.sha256,
+            size: json.size,
+          });
+        }
+        const recv = sessions.get(sessionId)!;
+        return jsonResponse(200, {
+          sessionId,
+          totalChunks: recv.totalChunks,
+          receivedChunks: [...recv.received],
+        });
+      }
+
+      // CHUNK PUT
+      if (method === "PUT" && chunkMatch) {
+        const sessionId = chunkMatch[1];
+        const index = Number(chunkMatch[2]);
+        if (failPredicate && failPredicate(sessionId, index)) {
+          failPredicate = null;
+          throw new TypeError("Failed to fetch (simulated network drop)");
+        }
+        chunkPutCalls++;
+        const s = sessions.get(sessionId);
+        if (!s) return jsonResponse(404, { error: "not found" });
+        s.received.add(index);
+        return jsonResponse(200, {
+          sessionId,
+          index,
+          receivedChunks: [...s.received],
+        });
+      }
+
+      // COMPLETE
+      const completeMatch = url.match(/\/evidence\/sessions\/([^/]+)\/complete$/);
+      if (method === "POST" && completeMatch) {
+        const sessionId = completeMatch[1];
+        const s = sessions.get(sessionId);
+        if (!s) return jsonResponse(404, { error: "not found" });
+        if (s.received.size !== s.totalChunks)
+          return jsonResponse(400, { error: "missing chunks" });
+        return jsonResponse(201, {
+          attachment: { id: "att-1", sha256: s.sha256, size: s.size, originalName: "x" },
+        });
+      }
+
+      return jsonResponse(404, { error: "unknown route" });
+    },
+  };
+}
+
+function jsonResponse(status: number, data: any): any {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => data,
+    text: async () => JSON.stringify(data),
+  };
+}
+
+function installFetch(backend: ReturnType<typeof makeBackend>) {
+  (global as any).fetch = (url: string, init: any) =>
+    backend.handle(url as string, init);
+}
+
+function makeFile(name: string, size: number, type = "application/pdf"): File {
+  const buf = new Uint8Array(size);
+  for (let i = 0; i < size; i++) buf[i] = (i * 17 + 3) % 256;
+  return new File([buf], name, { type });
+}
+
+const TOKEN = "token-abc";
+beforeAll(() => localStorage.setItem("token", TOKEN));
+
+describe("uploadFileResumable (protocol)", () => {
+  it("skips chunks the server already has and resumes from the last chunk", async () => {
+    const backend = makeBackend();
+    installFetch(backend);
+
+    const file = makeFile("a.pdf", CHUNK_SIZE * 2 + 100); // 3 chunks
+    const sha = "a".repeat(64);
+
+    const probe = await uploadFileResumable(
+      "http://localhost/api/v1",
+      TOKEN,
+      "dispute-1",
+      file,
+      "f1",
+      { name: file.name, mimeType: file.type, sha256: sha },
+    );
+    expect(probe.sessionId).toBeTruthy();
+
+    // Server already has chunks 0 and 1 (prior progress).
+    backend.sessions.get(probe.sessionId)!.received = new Set([0, 1]);
+
+    const before = backend.getChunkPutCalls();
+    const result = await uploadFileResumable(
+      "http://localhost/api/v1",
+      TOKEN,
+      "dispute-1",
+      file,
+      "f1",
+      { name: file.name, mimeType: file.type, sha256: sha },
+    );
+    const after = backend.getChunkPutCalls();
+    expect(after - before).toBe(1); // only chunk 2 sent
+    expect(result.attachment.id).toBe("att-1");
+  });
+});
+
+describe("EvidenceUpload component", () => {
+  beforeEach(() => localStorage.clear());
+
+  async function selectFiles(utils: any, files: File[]) {
+    const input = utils.container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    Object.defineProperty(input, "files", { configurable: true, value: files });
+    fireEvent.change(input);
+  }
+
+  it("does not re-upload file 1 and resumes file 2 from its last chunk after a drop", async () => {
+    const backend = makeBackend();
+    installFetch(backend);
+    const utils = render(<EvidenceUpload disputeId="dispute-1" />);
+
+    const f1 = makeFile("ok.pdf", CHUNK_SIZE + 10); // 2 chunks
+    const f2 = makeFile("partial.pdf", CHUNK_SIZE * 3 + 5); // 4 chunks
+    await selectFiles(utils, [f1, f2]);
+
+    // Fail on the FIRST 4-chunk file's chunk index 2 (only f2 reaches index 2).
+    backend.failWhen((sid, idx) => idx === 2 && backend.sessions.get(sid)!.totalChunks === 4);
+
+    fireEvent.click(screen.getByText(/Hash & Upload Evidence/i));
+
+    await waitFor(
+      () => expect(screen.getByText(/Uploaded with integrity proof/i)).toBeInTheDocument(),
+      { timeout: 10000 },
+    );
+    await waitFor(
+      () => expect(screen.getByText(/You can retry this file/i)).toBeInTheDocument(),
+      { timeout: 10000 },
+    );
+
+    const putsBeforeRetry = backend.getChunkPutCalls();
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    await waitFor(
+      () =>
+        expect(
+          screen.getAllByText(/Uploaded with integrity proof/i).length,
+        ).toBe(3),
+      { timeout: 10000 },
+    );
+
+    const reSent = backend.getChunkPutCalls() - putsBeforeRetry;
+    // f1 was never re-sent (already done). f2 had received {0,1}; retry sends 2,3 => 2.
+    expect(reSent).toBe(2);
+  });
+
+  it("handles a page reload gracefully", async () => {
+    const backend = makeBackend();
+    installFetch(backend);
+    const utils = render(<EvidenceUpload disputeId="dispute-1" />);
+
+    const file = makeFile("reload.pdf", CHUNK_SIZE + 1); // 2 chunks
+    await selectFiles(utils, [file]);
+
+    fireEvent.click(screen.getByText(/Hash & Upload Evidence/i));
+    await waitFor(
+      () =>
+        expect(
+          screen.getAllByText(/Uploaded with integrity proof/i).length,
+        ).toBeGreaterThanOrEqual(1),
+      { timeout: 10000 },
+    );
+
+    // Simulate reload.
+    utils.unmount();
+    const utils2 = render(<EvidenceUpload disputeId="dispute-1" />);
+    // Completed uploads are cleaned up from IndexedDB, so the component
+    // renders in its initial state after reload.
+    await waitFor(() => expect(screen.getByText(/Attach files/i)).toBeInTheDocument());
+  });
+
+  it("retries only the failed file without affecting the succeeded one", async () => {
+    const backend = makeBackend();
+    installFetch(backend);
+
+    // Fail a specific file's first chunk every time -> that file never completes.
+    let failSid: string | null = null;
+    backend.failWhen((sid, idx) => {
+      if (failSid === null && idx === 0) {
+        failSid = sid;
+        return true;
+      }
+      return failSid === sid && idx === 0;
+    });
+
+    const utils = render(<EvidenceUpload disputeId="dispute-1" />);
+    const fA = makeFile("willfail.pdf", CHUNK_SIZE + 1); // 2 chunks
+    const fB = makeFile("willsucceed.pdf", CHUNK_SIZE + 1);
+    await selectFiles(utils, [fA, fB]);
+
+    fireEvent.click(screen.getByText(/Hash & Upload Evidence/i));
+    await waitFor(() => expect(screen.getByText(/You can retry this file/i)).toBeInTheDocument(), { timeout: 10000 });
+    await waitFor(() => expect(screen.getByText(/Uploaded with integrity proof/i)).toBeInTheDocument(), { timeout: 10000 });
+
+    backend.resetFail();
+    fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    await waitFor(
+      () => expect(screen.getAllByText(/Uploaded with integrity proof/i).length).toBe(3),
+      { timeout: 10000 },
+    );
+  });
+});

@@ -29,7 +29,7 @@ describe("formatLocalTimestamp in UTC+1 context", () => {
     jest
       .spyOn(global.Intl, "DateTimeFormat")
       .mockImplementation(
-        (_locale?: string | string[], options?: Intl.DateTimeFormatOptions) =>
+        (_locale?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) =>
           new RealDateTimeFormat("en-GB", {
             ...options,
             timeZone: "Europe/London",
@@ -59,7 +59,7 @@ describe("LocalTimestamp component", () => {
     jest
       .spyOn(global.Intl, "DateTimeFormat")
       .mockImplementation(
-        (_locale?: string | string[], options?: Intl.DateTimeFormatOptions) =>
+        (_locale?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) =>
           new RealDateTimeFormat("en-GB", {
             ...options,
             timeZone: "Europe/London",
